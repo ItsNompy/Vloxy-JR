@@ -275,29 +275,31 @@ app.post('/announce-deal', async (req, res) => {
         const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
         const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
 
-        // Prices come in as tokens — convert to USD
         const dealUSD = (Number(dealPrice) * 0.003).toFixed(2);
         const origUSD = (Number(originalPrice) * 0.003).toFixed(2);
 
         const embed = new EmbedBuilder()
-            .setTitle('🔥 New Deal Available!')
+            .setTitle('🔥  L I M I T E D  D E A L  D R O P P E D')
             .setColor(0xf59e0b)
-            .setDescription(`A limited time deal has just dropped on **[vloxora.com](https://vloxora.com)**!`)
-            .addFields(
-                { name: '🎁 Item', value: itemName, inline: true },
-                { name: '💸 Deal Price', value: `$${dealUSD}`, inline: true },
-                { name: '🏷️ Original Price', value: `$${origUSD}`, inline: true },
-                { name: '📉 Discount', value: `${discount}% off`, inline: true },
-                { name: '📦 Stock', value: `${stock} available`, inline: true },
-                { name: '⚡ Hurry!', value: 'Deals sell out fast — grab it before it\'s gone!', inline: false }
+            .setDescription(
+                `## ${itemName}\n` +
+                `> A limited time deal is now live on **[vloxora.com](https://vloxora.com)**\n` +
+                `> Don't sleep on this — stock is limited!\n\u200b`
             )
-            .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
+            .addFields(
+                { name: '💸  Deal Price', value: `### $${dealUSD}`, inline: true },
+                { name: '🏷️  Original', value: `### ~~$${origUSD}~~`, inline: true },
+                { name: '🔥  You Save', value: `### ${discount}% OFF`, inline: true },
+                { name: '📦  Stock Left', value: `**${stock} available**`, inline: true },
+                { name: '⚡  Act Fast', value: '**Deals sell out within minutes**', inline: true },
+                { name: '\u200b', value: '> 🛒 **[Grab it now → vloxora.com](https://vloxora.com)**', inline: false }
+            )
+            .setImage(itemImage || null)
+            .setFooter({ text: 'Vloxora Shop • Vloxy JR', iconURL: 'https://vloxora.com/favicon.png' })
             .setTimestamp();
 
-        if (itemImage) embed.setThumbnail(itemImage);
-
         await channel.send({
-            content: `<@&${CONFIG.DEALS_ROLE_ID}> 🔥 **New deal just dropped!**`,
+            content: `<@&${CONFIG.DEALS_ROLE_ID}>\n# 🔥 NEW DEAL — ${itemName.toUpperCase()}\n**${discount}% off for a limited time — don't miss out!**`,
             embeds: [embed]
         });
 
@@ -311,7 +313,7 @@ app.post('/announce-deal', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// DEAL SOLD OUT ANNOUNCEMENT
+// DEAL SOLD OUT
 // ═══════════════════════════════════════════════════════════
 
 app.post('/announce-soldout', async (req, res) => {
@@ -326,30 +328,38 @@ app.post('/announce-soldout', async (req, res) => {
         const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
 
         const embed = new EmbedBuilder()
-            .setTitle('😔 Deal Sold Out')
-            .setColor(0xef4444)
-            .setDescription(`**${itemName}** has sold out! Keep an eye on **[vloxora.com](https://vloxora.com)** for the next deal.`)
+            .setTitle('😔  D E A L  S O L D  O U T')
+            .setColor(0x6b7280)
+            .setDescription(
+                `## ~~${itemName}~~\n` +
+                `> This deal has officially sold out.\n` +
+                `> Stay tuned — more deals drop regularly on **[vloxora.com](https://vloxora.com)**\n\u200b`
+            )
+            .addFields(
+                { name: '📭  Status', value: '**SOLD OUT**', inline: true },
+                { name: '🔔  Don\'t Miss Next Time', value: 'Keep notifications on!', inline: true },
+                { name: '\u200b', value: '> 👀 **[Check vloxora.com for more deals](https://vloxora.com)**', inline: false }
+            )
+            .setThumbnail(itemImage || null)
             .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
             .setTimestamp();
 
-        if (itemImage) embed.setThumbnail(itemImage);
-
         await channel.send({
-            content: `<@&${CONFIG.DEALS_ROLE_ID}> 😔 **${itemName}** is now sold out!`,
+            content: `<@&${CONFIG.DEALS_ROLE_ID}>\n# 😔 SOLD OUT — ${itemName.toUpperCase()}`,
             embeds: [embed]
         });
 
-        console.log(`✅ Sold out announced: ${itemName}`);
+        console.log(`✅ Deal sold out announced: ${itemName}`);
         res.json({ success: true });
 
     } catch (error) {
-        console.error('❌ Sold out announcement error:', error);
+        console.error('❌ Sold out error:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
 // ═══════════════════════════════════════════════════════════
-// STOCK UPDATE ANNOUNCEMENT
+// STOCK ADDED ANNOUNCEMENT
 // ═══════════════════════════════════════════════════════════
 
 app.post('/announce-stock', async (req, res) => {
@@ -363,37 +373,45 @@ app.post('/announce-stock', async (req, res) => {
         const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
         const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
 
-        // Convert value (tokens) to USD
         const priceUSD = value ? (Number(value) * 0.003).toFixed(2) : null;
 
-        // Colour based on rarity
         const rarityColors = {
             legend: 0xff9900,
             epic:   0xa855f7,
             rare:   0xef4444,
             basic:  0x3b82f6
         };
+        const rarityEmojis = {
+            legend: '🌈',
+            epic:   '💜',
+            rare:   '🔴',
+            basic:  '🔵'
+        };
         const color = rarityColors[(rarity || '').toLowerCase()] || 0x34d399;
+        const rarEmoji = rarityEmojis[(rarity || '').toLowerCase()] || '✨';
 
         const embed = new EmbedBuilder()
-            .setTitle('📦 New Stock Available!')
+            .setTitle(`📦  N E W  S T O C K  A V A I L A B L E`)
             .setColor(color)
-            .setDescription(`**${name}** is now in stock on **[vloxora.com](https://vloxora.com)**!`)
-            .addFields(
-                { name: '🎮 Item', value: name, inline: true },
-                { name: '✨ Rarity', value: rarity || 'Unknown', inline: true },
-                { name: '🗂️ Category', value: category || 'Unknown', inline: true },
-                ...(priceUSD ? [{ name: '💰 Price', value: `$${priceUSD}`, inline: true }] : []),
-                { name: '📦 Quantity', value: `${qty} available`, inline: true },
-                { name: '👤 Added By', value: addedBy || 'Admin', inline: true }
+            .setDescription(
+                `## ${rarEmoji} ${name}\n` +
+                `> Fresh stock has just been added to **[vloxora.com](https://vloxora.com)**\n` +
+                `> Grab it before it sells out!\n\u200b`
             )
+            .addFields(
+                { name: '✨  Rarity', value: `**${rarity || 'Unknown'}**`, inline: true },
+                { name: '🗂️  Category', value: `**${category || 'Unknown'}**`, inline: true },
+                ...(priceUSD ? [{ name: '💰  Price', value: `**$${priceUSD}**`, inline: true }] : []),
+                { name: '📦  In Stock', value: `**${qty} available**`, inline: true },
+                { name: '👤  Added By', value: `**${addedBy || 'Admin'}**`, inline: true },
+                { name: '\u200b', value: `> 🛒 **[Shop now → vloxora.com](https://vloxora.com)**`, inline: false }
+            )
+            .setImage(image || null)
             .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
             .setTimestamp();
 
-        if (image) embed.setThumbnail(image);
-
         await channel.send({
-            content: `<@&${CONFIG.DEALS_ROLE_ID}> 📦 **${name}** is now in stock!`,
+            content: `<@&${CONFIG.DEALS_ROLE_ID}>\n# 📦 IN STOCK — ${name.toUpperCase()}\n**${qty}x ${rarity || ''} ${name} just dropped into the shop!**`,
             embeds: [embed]
         });
 
@@ -402,6 +420,154 @@ app.post('/announce-stock', async (req, res) => {
 
     } catch (error) {
         console.error('❌ Stock announcement error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════
+// BULK STOCK SESSION ANNOUNCEMENT (one ping for all changes)
+// ═══════════════════════════════════════════════════════════
+
+app.post('/announce-stock-session', async (req, res) => {
+    try {
+        if (req.headers.authorization !== `Bearer ${CONFIG.API_SECRET}`) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        const { added, removed, addedBy } = req.body;
+
+        if ((!added || added.length === 0) && (!removed || removed.length === 0)) {
+            return res.json({ success: true, message: 'Nothing to announce' });
+        }
+
+        const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
+        const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
+
+        const rarityColors = { legend: 0xff9900, epic: 0xa855f7, rare: 0xef4444, basic: 0x3b82f6 };
+        const rarityEmojis = { legend: '🌈', epic: '💜', rare: '🔴', basic: '🔵' };
+
+        const embeds = [];
+
+        // One embed per added item
+        if (added && added.length > 0) {
+            for (const item of added) {
+                const priceUSD = item.value ? (Number(item.value) * 0.003).toFixed(2) : null;
+                const color = rarityColors[(item.rarity || '').toLowerCase()] || 0x34d399;
+                const rarEmoji = rarityEmojis[(item.rarity || '').toLowerCase()] || '✨';
+
+                const embed = new EmbedBuilder()
+                    .setTitle(`📦  N E W  S T O C K`)
+                    .setColor(color)
+                    .setDescription(
+                        `## ${rarEmoji} ${item.name}\n` +
+                        `> Now available on **[vloxora.com](https://vloxora.com)**\n\u200b`
+                    )
+                    .addFields(
+                        { name: '✨  Rarity',   value: `**${item.rarity || 'Unknown'}**`, inline: true },
+                        { name: '🗂️  Category', value: `**${item.category || 'Unknown'}**`, inline: true },
+                        ...(priceUSD ? [{ name: '💰  Price', value: `**$${priceUSD}**`, inline: true }] : []),
+                        { name: '📦  Qty',      value: `**${item.qty} available**`, inline: true },
+                    )
+                    .setImage(item.image || null)
+                    .setFooter({ text: `Added by ${addedBy || 'Admin'} • Vloxora Shop` })
+                    .setTimestamp();
+
+                embeds.push(embed);
+            }
+        }
+
+        // One embed for all removed items
+        if (removed && removed.length > 0) {
+            const embed = new EmbedBuilder()
+                .setTitle(`📭  R E M O V E D  F R O M  S T O C K`)
+                .setColor(0x6b7280)
+                .setDescription(
+                    removed.map(name => `~~${name}~~`).join('\n') +
+                    `\n\n> These items are no longer available in the shop.\n\u200b`
+                )
+                .setFooter({ text: `Removed by ${addedBy || 'Admin'} • Vloxora Shop` })
+                .setTimestamp();
+
+            embeds.push(embed);
+        }
+
+        // Build content message
+        const addedNames  = added && added.length  ? added.map(i => i.name).join(', ')  : null;
+        const removedText = removed && removed.length ? `\n📭 **Removed:** ${removed.join(', ')}` : '';
+        const addedText   = addedNames ? `📦 **Added:** ${addedNames}` : '';
+
+        const content =
+            `<@&${CONFIG.DEALS_ROLE_ID}>\n` +
+            `# 🛒 STOCK UPDATE\n` +
+            `${addedText}${removedText}\n` +
+            `**[Shop now → vloxora.com](https://vloxora.com)**`;
+
+        // Discord allows max 10 embeds per message — chunk if needed
+        const chunkSize = 10;
+        for (let i = 0; i < embeds.length; i += chunkSize) {
+            const chunk = embeds.slice(i, i + chunkSize);
+            await channel.send({
+                content: i === 0 ? content : '',
+                embeds: chunk
+            });
+        }
+
+        console.log(`✅ Stock session announced: +${added?.length || 0} added, -${removed?.length || 0} removed by ${addedBy}`);
+        res.json({ success: true });
+
+    } catch (error) {
+        console.error('❌ Stock session error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/announce-stockout', async (req, res) => {
+    try {
+        if (req.headers.authorization !== `Bearer ${CONFIG.API_SECRET}`) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        const { name, image, rarity, addedBy } = req.body;
+
+        const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
+        const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
+
+        const rarityColors = {
+            legend: 0xff9900,
+            epic:   0xa855f7,
+            rare:   0xef4444,
+            basic:  0x3b82f6
+        };
+        const color = rarityColors[(rarity || '').toLowerCase()] || 0x6b7280;
+
+        const embed = new EmbedBuilder()
+            .setTitle('📭  O U T  O F  S T O C K')
+            .setColor(0x6b7280)
+            .setDescription(
+                `## ~~${name}~~\n` +
+                `> This item has been removed from stock on **[vloxora.com](https://vloxora.com)**\n` +
+                `> Check back soon for restocks!\n\u200b`
+            )
+            .addFields(
+                { name: '📭  Status', value: '**OUT OF STOCK**', inline: true },
+                { name: '✨  Rarity', value: `**${rarity || 'Unknown'}**`, inline: true },
+                { name: '👤  Removed By', value: `**${addedBy || 'Admin'}**`, inline: true },
+                { name: '\u200b', value: '> 👀 **[Browse available stock → vloxora.com](https://vloxora.com)**', inline: false }
+            )
+            .setThumbnail(image || null)
+            .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
+            .setTimestamp();
+
+        await channel.send({
+            content: `<@&${CONFIG.DEALS_ROLE_ID}>\n# 📭 OUT OF STOCK — ${name.toUpperCase()}`,
+            embeds: [embed]
+        });
+
+        console.log(`✅ Stock out announced: ${name}`);
+        res.json({ success: true });
+
+    } catch (error) {
+        console.error('❌ Stock out error:', error);
         res.status(500).json({ error: error.message });
     }
 });
