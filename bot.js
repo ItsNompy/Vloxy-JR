@@ -29,6 +29,7 @@ const CONFIG = {
     STAFF_ROLE_ID: '1493771410227593317',
     DEALS_CHANNEL_ID: '1493789475489189898',
     DEALS_ROLE_ID: '1493867173683400865',
+    CHANGES_CHANNEL_ID: '1494041831263043684',
     API_SECRET: process.env.API_SECRET
 };
 
@@ -258,6 +259,84 @@ app.post('/create-ticket', async (req, res) => {
 
 app.get('/', (req, res) => {
     res.json({ status: 'online', service: 'Vloxy JR' });
+});
+
+// ═══════════════════════════════════════════════════════════
+// VALUE CHANGE ANNOUNCEMENT
+// ═══════════════════════════════════════════════════════════
+
+app.post('/announce-value-change', async (req, res) => {
+    try {
+        if (req.headers.authorization !== `Bearer ${CONFIG.API_SECRET}`) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        const { itemName, itemImage, itemRarity, oldValue, newValue, oldDemand, newDemand, reason, proofUrls, changedBy } = req.body;
+
+        const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
+        const channel = await guild.channels.fetch(CONFIG.CHANGES_CHANNEL_ID);
+
+        const rarityColors = {
+            legend: 0xff9900,
+            epic:   0xa855f7,
+            rare:   0xef4444,
+            basic:  0x3b82f6
+        };
+        const color = rarityColors[(itemRarity || '').toLowerCase()] || 0x818cf8;
+
+        // Value change
+        const valueChanged  = newValue !== oldValue;
+        const demandChanged = newDemand !== oldDemand;
+        const valueWent     = newValue > oldValue ? '📈' : '📉';
+        const demandWent    = newDemand > oldDemand ? '📈' : '📉';
+
+        // Demand stars display
+        const starDisplay = (n) => '⭐'.repeat(Math.min(n || 0, 5)) || 'None';
+
+        const fields = [];
+
+        if (valueChanged) {
+            fields.push({ name: '\u200b', value: `${valueWent}  **Value Change**\n${(oldValue||0).toLocaleString()} tokens  →  **${(newValue||0).toLocaleString()} tokens**`, inline: false });
+        }
+        if (demandChanged) {
+            fields.push({ name: '\u200b', value: `${demandWent}  **Demand Change**\n${starDisplay(oldDemand)}  →  **${starDisplay(newDemand)}**`, inline: false });
+        }
+
+        fields.push({ name: '\u200b', value: `📋  **Admin Reasoning**\n${reason}`, inline: false });
+        fields.push({ name: '\u200b', value: `👤  **Updated By**\n${changedBy || 'Admin'}`, inline: false });
+        fields.push({ name: '\u200b', value: `> 📊 **[View on vloxora.com](https://vloxora.com)**`, inline: false });
+
+        const embed = new EmbedBuilder()
+            .setTitle(`📊  VALUE UPDATE — ${itemName.toUpperCase()}`)
+            .setColor(color)
+            .setDescription(
+                `> **${itemName}** has been reviewed and updated by staff.\n\u200b`
+            )
+            .addFields(...fields)
+            .setThumbnail(itemImage || null)
+            .setFooter({ text: `Vloxora Value Team • Vloxy JR` })
+            .setTimestamp();
+
+        // If proof images were uploaded add them
+        const files = [];
+        if (proofUrls && proofUrls.length > 0) {
+            embed.addFields({
+                name: '\u200b',
+                value: `📸  **Proof** (${proofUrls.length} screenshot${proofUrls.length > 1 ? 's' : ''})\n` +
+                    proofUrls.map((u, i) => `[Screenshot ${i + 1}](${u})`).join('  ·  '),
+                inline: false
+            });
+        }
+
+        await channel.send({ embeds: [embed] });
+
+        console.log(`✅ Value change announced: ${itemName} by ${changedBy}`);
+        res.json({ success: true });
+
+    } catch (error) {
+        console.error('❌ Value change error:', error);
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // ═══════════════════════════════════════════════════════════
