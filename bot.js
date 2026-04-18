@@ -27,6 +27,8 @@ const CONFIG = {
     GUILD_ID: '1478513220405690408',
     TICKET_CATEGORY_ID: '1493872085993525340',
     STAFF_ROLE_ID: '1493771410227593317',
+    DEALS_CHANNEL_ID: '1493789475489189898',
+    DEALS_ROLE_ID: '1493867173683400865',
     API_SECRET: process.env.API_SECRET
 };
 
@@ -256,6 +258,90 @@ app.post('/create-ticket', async (req, res) => {
 
 app.get('/', (req, res) => {
     res.json({ status: 'online', service: 'Vloxy JR' });
+});
+
+// ═══════════════════════════════════════════════════════════
+// NEW DEAL ANNOUNCEMENT
+// ═══════════════════════════════════════════════════════════
+
+app.post('/announce-deal', async (req, res) => {
+    try {
+        if (req.headers.authorization !== `Bearer ${CONFIG.API_SECRET}`) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        const { itemName, itemImage, originalPrice, dealPrice, discount, stock } = req.body;
+
+        const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
+        const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
+
+        const embed = new EmbedBuilder()
+            .setTitle('🔥 New Deal Available!')
+            .setColor(0xf59e0b)
+            .setDescription(`A limited time deal has just dropped on **[vloxora.com](https://vloxora.com)**!`)
+            .addFields(
+                { name: '🎁 Item', value: itemName, inline: true },
+                { name: '💸 Deal Price', value: `$${Number(dealPrice).toLocaleString()}`, inline: true },
+                { name: '🏷️ Original Price', value: `$${Number(originalPrice).toLocaleString()}`, inline: true },
+                { name: '📉 Discount', value: `${discount}% off`, inline: true },
+                { name: '📦 Stock', value: `${stock} available`, inline: true },
+                { name: '⚡ Hurry!', value: 'Deals sell out fast — grab it before it\'s gone!', inline: false }
+            )
+            .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
+            .setTimestamp();
+
+        if (itemImage) embed.setThumbnail(itemImage);
+
+        await channel.send({
+            content: `<@&${CONFIG.DEALS_ROLE_ID}> 🔥 **New deal just dropped!**`,
+            embeds: [embed]
+        });
+
+        console.log(`✅ Deal announced: ${itemName} at $${dealPrice}`);
+        res.json({ success: true });
+
+    } catch (error) {
+        console.error('❌ Deal announcement error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════
+// DEAL SOLD OUT ANNOUNCEMENT
+// ═══════════════════════════════════════════════════════════
+
+app.post('/announce-soldout', async (req, res) => {
+    try {
+        if (req.headers.authorization !== `Bearer ${CONFIG.API_SECRET}`) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        const { itemName, itemImage } = req.body;
+
+        const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
+        const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
+
+        const embed = new EmbedBuilder()
+            .setTitle('😔 Deal Sold Out')
+            .setColor(0xef4444)
+            .setDescription(`**${itemName}** has sold out! Keep an eye on **[vloxora.com](https://vloxora.com)** for the next deal.`)
+            .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
+            .setTimestamp();
+
+        if (itemImage) embed.setThumbnail(itemImage);
+
+        await channel.send({
+            content: `<@&${CONFIG.DEALS_ROLE_ID}> 😔 **${itemName}** is now sold out!`,
+            embeds: [embed]
+        });
+
+        console.log(`✅ Sold out announced: ${itemName}`);
+        res.json({ success: true });
+
+    } catch (error) {
+        console.error('❌ Sold out announcement error:', error);
+        res.status(500).json({ error: error.message });
+    }
 });
 
 app.get('/health', (req, res) => {
