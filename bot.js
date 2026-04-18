@@ -542,10 +542,10 @@ app.post('/announce-tokens', async (req, res) => {
 
         const embed = new EmbedBuilder()
             .setTitle(newTokens === 0
-                ? '<:Token:1495134289728110622>  T O K E N S  S O L D  O U T'
+                ? '<:Token:1495134289728110622>  TOKENS SOLD OUT'
                 : added
-                    ? '<:Token:1495134289728110622>  T O K E N S  R E S T O C K E D'
-                    : '<:Token:1495134289728110622>  T O K E N  S U P P L Y  U P D A T E D')
+                    ? '<:Token:1495134289728110622>  TOKENS RESTOCKED'
+                    : '<:Token:1495134289728110622>  TOKEN SUPPLY UPDATED')
             .setColor(color)
             .setDescription(
                 newTokens === 0
@@ -553,10 +553,10 @@ app.post('/announce-tokens', async (req, res) => {
                     : `> Token supply has been updated on **[vloxora.com](https://vloxora.com)**\n\u200b`
             )
             .addFields(
-                { name: '<:Token:1495134289728110622>  New Supply', value: `**${newTokens.toLocaleString()} tokens**`, inline: true },
-                { name: added ? '📈  Added' : '📉  Reduced', value: `**${diff.toLocaleString()} tokens**`, inline: true },
-                { name: '💲  Rate', value: `**$3 / 1,000 tokens**`, inline: true },
-                { name: '👤  Updated By', value: `**${addedBy || 'Admin'}**`, inline: true },
+                { name: '\u200b', value: `<:Token:1495134289728110622>  **New Supply**\n${newTokens.toLocaleString()} tokens`, inline: false },
+                { name: '\u200b', value: `${added ? '📈' : '📉'}  **${added ? 'Added' : 'Reduced'}**\n${diff.toLocaleString()} tokens`, inline: false },
+                { name: '\u200b', value: `💲  **Rate**\n$3 / 1k tokens`, inline: false },
+                { name: '\u200b', value: `👤  **Updated By**\n${addedBy || 'Admin'}`, inline: false },
                 { name: '\u200b', value: '> 🛒 **[Shop now → vloxora.com](https://vloxora.com)**', inline: false }
             )
             .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
