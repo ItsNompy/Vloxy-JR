@@ -577,6 +577,8 @@ app.post('/announce-tokens', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
+app.post('/announce-stockout', async (req, res) => {
     try {
         if (req.headers.authorization !== `Bearer ${CONFIG.API_SECRET}`) {
             return res.status(401).json({ error: 'Unauthorized' });
