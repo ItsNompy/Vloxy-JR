@@ -1,6 +1,6 @@
 // Vloxy JR — Vloxora Ticket Bot
 require('dotenv').config();
-const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder, REST, Routes, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const express = require('express');
 const cors = require('cors');
 
@@ -30,9 +30,103 @@ const CONFIG = {
     API_SECRET: process.env.API_SECRET
 };
 
-client.once('clientReady', () => {
+client.once('clientReady', async () => {
     console.log(`✅ Vloxy JR online as ${client.user.tag}`);
     console.log(`🎫 Ticket system ready`);
+
+    // Register slash commands
+    const commands = [
+        new SlashCommandBuilder()
+            .setName('close')
+            .setDescription('Close and delete this ticket channel')
+            .toJSON(),
+        new SlashCommandBuilder()
+            .setName('add')
+            .setDescription('Add a user to this ticket')
+            .addUserOption(opt => opt.setName('user').setDescription('User to add').setRequired(true))
+            .toJSON(),
+        new SlashCommandBuilder()
+            .setName('remove')
+            .setDescription('Remove a user from this ticket')
+            .addUserOption(opt => opt.setName('user').setDescription('User to remove').setRequired(true))
+            .toJSON(),
+    ];
+
+    try {
+        const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+        await rest.put(Routes.applicationGuildCommands(client.user.id, CONFIG.GUILD_ID), { body: commands });
+        console.log('✅ Slash commands registered');
+    } catch (err) {
+        console.error('Failed to register commands:', err);
+    }
+});
+
+// Handle slash commands and buttons
+client.on('interactionCreate', async (interaction) => {
+
+    // Handle close button
+    if (interaction.isButton() && interaction.customId === 'close_ticket') {
+        const member = interaction.member;
+        const isStaff = member.roles.cache.has(CONFIG.STAFF_ROLE_ID);
+
+        if (!isStaff) {
+            return interaction.reply({ content: '❌ Only staff can close tickets.', ephemeral: true });
+        }
+
+        await interaction.reply('✅ Closing ticket in 5 seconds...');
+        setTimeout(async () => {
+            try { await interaction.channel.delete(); } catch (err) { console.error(err); }
+        }, 5000);
+        return;
+    }
+
+    if (!interaction.isChatInputCommand()) return;
+
+    // Only allow staff to use these commands
+    const member = interaction.member;
+    const isStaff = member.roles.cache.has(CONFIG.STAFF_ROLE_ID);
+
+    if (!isStaff) {
+        return interaction.reply({ content: '❌ Only staff can use this command.', ephemeral: true });
+    }
+
+    // /close — close the ticket
+    if (interaction.commandName === 'close') {
+        const channel = interaction.channel;
+
+        // Make sure we're in a ticket channel
+        if (!channel.name.startsWith('order-')) {
+            return interaction.reply({ content: '❌ This command can only be used in a ticket channel.', ephemeral: true });
+        }
+
+        await interaction.reply('✅ Closing ticket in 5 seconds...');
+
+        setTimeout(async () => {
+            try {
+                await channel.delete();
+            } catch (err) {
+                console.error('Failed to delete channel:', err);
+            }
+        }, 5000);
+    }
+
+    // /add — add a user to the ticket
+    if (interaction.commandName === 'add') {
+        const user = interaction.options.getUser('user');
+        await interaction.channel.permissionOverwrites.create(user, {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true
+        });
+        await interaction.reply(`✅ Added ${user} to the ticket.`);
+    }
+
+    // /remove — remove a user from the ticket
+    if (interaction.commandName === 'remove') {
+        const user = interaction.options.getUser('user');
+        await interaction.channel.permissionOverwrites.delete(user);
+        await interaction.reply(`✅ Removed ${user} from the ticket.`);
+    }
 });
 
 app.post('/create-ticket', async (req, res) => {
@@ -136,6 +230,19 @@ app.post('/create-ticket', async (req, res) => {
             `3. You'll receive your items in-game\n\n` +
             `Please stay here and wait for a staff member!`
         );
+
+        // Send close button for staff
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('close_ticket')
+                .setLabel('🔒 Close Ticket')
+                .setStyle(ButtonStyle.Danger)
+        );
+
+        await channel.send({
+            content: `**Staff:** Use the button below or \`/close\` to close this ticket when complete.`,
+            components: [row]
+        });
 
         console.log(`✅ Ticket created: #${channelName} for ${member.user.username} — $${total}`);
 
