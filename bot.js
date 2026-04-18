@@ -521,7 +521,62 @@ app.post('/announce-stock-session', async (req, res) => {
     }
 });
 
-app.post('/announce-stockout', async (req, res) => {
+// ═══════════════════════════════════════════════════════════
+// TOKEN SUPPLY ANNOUNCEMENT
+// ═══════════════════════════════════════════════════════════
+
+app.post('/announce-tokens', async (req, res) => {
+    try {
+        if (req.headers.authorization !== `Bearer ${CONFIG.API_SECRET}`) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        const { oldTokens, newTokens, addedBy } = req.body;
+
+        const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
+        const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
+
+        const added = newTokens > oldTokens;
+        const diff  = Math.abs(newTokens - oldTokens);
+        const color = newTokens === 0 ? 0x6b7280 : added ? 0x34d399 : 0xf59e0b;
+
+        const embed = new EmbedBuilder()
+            .setTitle(newTokens === 0
+                ? '📭  T O K E N S  S O L D  O U T'
+                : added
+                    ? '🪙  T O K E N S  R E S T O C K E D'
+                    : '🪙  T O K E N  S U P P L Y  U P D A T E D')
+            .setColor(color)
+            .setDescription(
+                newTokens === 0
+                    ? `> Tokens are currently **sold out**.\n> Check back soon!\n\u200b`
+                    : `> Token supply has been updated on **[vloxora.com](https://vloxora.com)**\n\u200b`
+            )
+            .addFields(
+                { name: '🪙  New Supply', value: `**${newTokens.toLocaleString()} tokens**`, inline: true },
+                { name: added ? '📈  Added' : '📉  Reduced', value: `**${diff.toLocaleString()} tokens**`, inline: true },
+                { name: '💰  Value', value: `**$${(newTokens * 0.003).toFixed(2)}**`, inline: true },
+                { name: '👤  Updated By', value: `**${addedBy || 'Admin'}**`, inline: true },
+                { name: '\u200b', value: '> 🛒 **[Shop now → vloxora.com](https://vloxora.com)**', inline: false }
+            )
+            .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
+            .setTimestamp();
+
+        await channel.send({
+            content: newTokens === 0
+                ? `<@&${CONFIG.DEALS_ROLE_ID}>\n# 📭 TOKENS SOLD OUT`
+                : `<@&${CONFIG.DEALS_ROLE_ID}>\n# 🪙 ${newTokens.toLocaleString()} TOKENS NOW AVAILABLE`,
+            embeds: [embed]
+        });
+
+        console.log(`✅ Token supply announced: ${oldTokens} → ${newTokens} by ${addedBy}`);
+        res.json({ success: true });
+
+    } catch (error) {
+        console.error('❌ Token announce error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
     try {
         if (req.headers.authorization !== `Bearer ${CONFIG.API_SECRET}`) {
             return res.status(401).json({ error: 'Unauthorized' });
