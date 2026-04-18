@@ -275,14 +275,18 @@ app.post('/announce-deal', async (req, res) => {
         const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
         const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
 
+        // Prices come in as tokens — convert to USD
+        const dealUSD = (Number(dealPrice) * 0.003).toFixed(2);
+        const origUSD = (Number(originalPrice) * 0.003).toFixed(2);
+
         const embed = new EmbedBuilder()
             .setTitle('🔥 New Deal Available!')
             .setColor(0xf59e0b)
             .setDescription(`A limited time deal has just dropped on **[vloxora.com](https://vloxora.com)**!`)
             .addFields(
                 { name: '🎁 Item', value: itemName, inline: true },
-                { name: '💸 Deal Price', value: `$${Number(dealPrice).toLocaleString()}`, inline: true },
-                { name: '🏷️ Original Price', value: `$${Number(originalPrice).toLocaleString()}`, inline: true },
+                { name: '💸 Deal Price', value: `$${dealUSD}`, inline: true },
+                { name: '🏷️ Original Price', value: `$${origUSD}`, inline: true },
                 { name: '📉 Discount', value: `${discount}% off`, inline: true },
                 { name: '📦 Stock', value: `${stock} available`, inline: true },
                 { name: '⚡ Hurry!', value: 'Deals sell out fast — grab it before it\'s gone!', inline: false }
@@ -297,7 +301,7 @@ app.post('/announce-deal', async (req, res) => {
             embeds: [embed]
         });
 
-        console.log(`✅ Deal announced: ${itemName} at $${dealPrice}`);
+        console.log(`✅ Deal announced: ${itemName} at $${dealUSD}`);
         res.json({ success: true });
 
     } catch (error) {
@@ -340,6 +344,64 @@ app.post('/announce-soldout', async (req, res) => {
 
     } catch (error) {
         console.error('❌ Sold out announcement error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════
+// STOCK UPDATE ANNOUNCEMENT
+// ═══════════════════════════════════════════════════════════
+
+app.post('/announce-stock', async (req, res) => {
+    try {
+        if (req.headers.authorization !== `Bearer ${CONFIG.API_SECRET}`) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        const { name, image, rarity, category, value, qty, addedBy } = req.body;
+
+        const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
+        const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
+
+        // Convert value (tokens) to USD
+        const priceUSD = value ? (Number(value) * 0.003).toFixed(2) : null;
+
+        // Colour based on rarity
+        const rarityColors = {
+            legend: 0xff9900,
+            epic:   0xa855f7,
+            rare:   0xef4444,
+            basic:  0x3b82f6
+        };
+        const color = rarityColors[(rarity || '').toLowerCase()] || 0x34d399;
+
+        const embed = new EmbedBuilder()
+            .setTitle('📦 New Stock Available!')
+            .setColor(color)
+            .setDescription(`**${name}** is now in stock on **[vloxora.com](https://vloxora.com)**!`)
+            .addFields(
+                { name: '🎮 Item', value: name, inline: true },
+                { name: '✨ Rarity', value: rarity || 'Unknown', inline: true },
+                { name: '🗂️ Category', value: category || 'Unknown', inline: true },
+                ...(priceUSD ? [{ name: '💰 Price', value: `$${priceUSD}`, inline: true }] : []),
+                { name: '📦 Quantity', value: `${qty} available`, inline: true },
+                { name: '👤 Added By', value: addedBy || 'Admin', inline: true }
+            )
+            .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
+            .setTimestamp();
+
+        if (image) embed.setThumbnail(image);
+
+        await channel.send({
+            content: `<@&${CONFIG.DEALS_ROLE_ID}> 📦 **${name}** is now in stock!`,
+            embeds: [embed]
+        });
+
+        console.log(`✅ Stock announced: ${name} x${qty}`);
+        res.json({ success: true });
+
+    } catch (error) {
+        console.error('❌ Stock announcement error:', error);
         res.status(500).json({ error: error.message });
     }
 });
