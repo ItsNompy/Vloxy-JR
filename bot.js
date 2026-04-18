@@ -155,31 +155,30 @@ app.get('/health', (req, res) => {
     res.json({ status: 'online', bot: client.user?.tag || 'starting...', uptime: Math.floor(process.uptime()) + 's' });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = parseInt(process.env.PORT) || 3000;
+console.log(`🔌 Starting server on port ${PORT}...`);
 
-// Start HTTP server first so Railway health checks pass immediately
+// Start HTTP server first
 const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Vloxy JR API running on port ${PORT}`);
+    // Login bot after server is confirmed listening
+    client.login(process.env.DISCORD_TOKEN).catch(err => {
+        console.error('Failed to login bot:', err);
+    });
 });
 
-// Keep the process alive — prevent Railway from killing it
-process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
+server.on('error', (err) => {
+    console.error('Server error:', err);
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
 });
 
 process.on('unhandledRejection', (reason) => {
     console.error('Unhandled Rejection:', reason);
 });
 
-// Reconnect bot if it disconnects
-client.on('disconnect', () => {
-    console.log('⚠️ Bot disconnected, reconnecting...');
-    client.login(process.env.DISCORD_TOKEN);
+client.on('error', (err) => {
+    console.error('Discord client error:', err);
 });
-
-client.on('error', (error) => {
-    console.error('Bot error:', error);
-});
-
-// Login the bot
-client.login(process.env.DISCORD_TOKEN);
