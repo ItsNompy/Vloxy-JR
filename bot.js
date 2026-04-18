@@ -542,10 +542,10 @@ app.post('/announce-tokens', async (req, res) => {
 
         const embed = new EmbedBuilder()
             .setTitle(newTokens === 0
-                ? '📭  T O K E N S  S O L D  O U T'
+                ? '<:Token:1495134289728110622>  T O K E N S  S O L D  O U T'
                 : added
-                    ? '🪙  T O K E N S  R E S T O C K E D'
-                    : '🪙  T O K E N  S U P P L Y  U P D A T E D')
+                    ? '<:Token:1495134289728110622>  T O K E N S  R E S T O C K E D'
+                    : '<:Token:1495134289728110622>  T O K E N  S U P P L Y  U P D A T E D')
             .setColor(color)
             .setDescription(
                 newTokens === 0
@@ -553,9 +553,9 @@ app.post('/announce-tokens', async (req, res) => {
                     : `> Token supply has been updated on **[vloxora.com](https://vloxora.com)**\n\u200b`
             )
             .addFields(
-                { name: '🪙  New Supply', value: `**${newTokens.toLocaleString()} tokens**`, inline: true },
+                { name: '<:Token:1495134289728110622>  New Supply', value: `**${newTokens.toLocaleString()} tokens**`, inline: true },
                 { name: added ? '📈  Added' : '📉  Reduced', value: `**${diff.toLocaleString()} tokens**`, inline: true },
-                { name: '💰  Value', value: `**$${(newTokens * 0.003).toFixed(2)}**`, inline: true },
+                { name: '💲  Rate', value: `**$3 / 1,000 tokens**`, inline: true },
                 { name: '👤  Updated By', value: `**${addedBy || 'Admin'}**`, inline: true },
                 { name: '\u200b', value: '> 🛒 **[Shop now → vloxora.com](https://vloxora.com)**', inline: false }
             )
@@ -564,8 +564,8 @@ app.post('/announce-tokens', async (req, res) => {
 
         await channel.send({
             content: newTokens === 0
-                ? `<@&${CONFIG.DEALS_ROLE_ID}>\n# 📭 TOKENS SOLD OUT`
-                : `<@&${CONFIG.DEALS_ROLE_ID}>\n# 🪙 ${newTokens.toLocaleString()} TOKENS NOW AVAILABLE`,
+                ? `<@&${CONFIG.DEALS_ROLE_ID}>\n# <:Token:1495134289728110622> TOKENS SOLD OUT`
+                : `<@&${CONFIG.DEALS_ROLE_ID}>\n# <:Token:1495134289728110622> ${newTokens.toLocaleString()} TOKENS NOW AVAILABLE ($3/1k Tokens)`,
             embeds: [embed]
         });
 
