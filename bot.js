@@ -147,10 +147,21 @@ app.post('/create-ticket', async (req, res) => {
     }
 });
 
+app.get('/', (req, res) => {
+    res.json({ status: 'online', service: 'Vloxy JR' });
+});
+
 app.get('/health', (req, res) => {
     res.json({ status: 'online', bot: client.user?.tag || 'starting...', uptime: Math.floor(process.uptime()) + 's' });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🌐 Vloxy JR API running on port ${PORT}`));
+
+// Start the HTTP server FIRST before anything else
+// This way Railway's health check gets a response immediately
+const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🌐 Vloxy JR API running on port ${PORT}`);
+});
+
+// Then login the bot
 client.login(process.env.DISCORD_TOKEN);
