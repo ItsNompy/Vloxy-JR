@@ -294,7 +294,7 @@ app.post('/announce-deal', async (req, res) => {
                 { name: '⚡  Act Fast', value: '**Deals sell out within minutes**', inline: true },
                 { name: '\u200b', value: '> 🛒 **[Grab it now → vloxora.com](https://vloxora.com)**', inline: false }
             )
-            .setImage(itemImage || null)
+            .setThumbnail(itemImage || null)
             .setFooter({ text: 'Vloxora Shop • Vloxy JR', iconURL: 'https://vloxora.com/favicon.png' })
             .setTimestamp();
 
@@ -459,7 +459,7 @@ app.post('/announce-stock-session', async (req, res) => {
                     .setTitle(`📦  N E W  S T O C K`)
                     .setColor(color)
                     .setDescription(
-                        `## ${rarEmoji} ${item.name}\n` +
+                        `## ${item.name}\n` +
                         `> Now available on **[vloxora.com](https://vloxora.com)**\n\u200b`
                     )
                     .addFields(
@@ -468,7 +468,7 @@ app.post('/announce-stock-session', async (req, res) => {
                         ...(priceUSD ? [{ name: '💰  Price', value: `**$${priceUSD}**`, inline: true }] : []),
                         { name: '📦  Qty',      value: `**${item.qty} available**`, inline: true },
                     )
-                    .setImage(item.image || null)
+                    .setThumbnail(item.image || null)
                     .setFooter({ text: `Added by ${addedBy || 'Admin'} • Vloxora Shop` })
                     .setTimestamp();
 
