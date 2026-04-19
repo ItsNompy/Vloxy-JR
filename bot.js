@@ -794,45 +794,37 @@ app.post('/announce-stock', async (req, res) => {
         const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
         const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
 
-        const priceUSD = value ? (Number(value) * 0.003).toFixed(2) : null;
-
         const rarityColors = {
             legend: 0xff9900,
             epic:   0xa855f7,
             rare:   0xef4444,
             basic:  0x3b82f6
         };
-        const rarityEmojis = {
-            legend: '🌈',
-            epic:   '💜',
-            rare:   '🔴',
-            basic:  '🔵'
-        };
-        const color = rarityColors[(rarity || '').toLowerCase()] || 0x34d399;
-        const rarEmoji = rarityEmojis[(rarity || '').toLowerCase()] || '✨';
+        const color  = rarityColors[(rarity || '').toLowerCase()] || 0x34d399;
+        const priceUSD = value ? `$${Math.max(1, Math.ceil(Number(value) * 0.003))}` : null;
+
+        const fields = [
+            { name: 'Rarity',   value: rarity || 'Unknown',   inline: true },
+            { name: 'Category', value: category || 'Unknown', inline: true },
+        ];
+        if (priceUSD) fields.push({ name: 'Price', value: priceUSD, inline: true });
+        fields.push({ name: 'Qty', value: `${qty} available`, inline: true });
 
         const embed = new EmbedBuilder()
-            .setTitle(`📦  N E W  S T O C K  A V A I L A B L E`)
+            .setAuthor({
+                name: 'Vloxora Shop',
+                iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png'
+            })
+            .setTitle(name)
             .setColor(color)
-            .setDescription(
-                `## ${rarEmoji} ${name}\n` +
-                `> Fresh stock has just been added to **[vloxora.com](https://vloxora.com)**\n` +
-                `> Grab it before it sells out!\n\u200b`
-            )
-            .addFields(
-                { name: '✨  Rarity', value: `**${rarity || 'Unknown'}**`, inline: true },
-                { name: '🗂️  Category', value: `**${category || 'Unknown'}**`, inline: true },
-                ...(priceUSD ? [{ name: '💰  Price', value: `**$${priceUSD}**`, inline: true }] : []),
-                { name: '📦  In Stock', value: `**${qty} available**`, inline: true },
-                { name: '👤  Added By', value: `**${addedBy || 'Admin'}**`, inline: true },
-                { name: '\u200b', value: `> 🛒 **[Shop now → vloxora.com](https://vloxora.com)**`, inline: false }
-            )
-            .setImage(image || null)
-            .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
+            .setDescription(`Now available on **[vloxora.com](https://vloxora.com)**`)
+            .addFields(...fields)
+            .setThumbnail(image || null)
+            .setFooter({ text: `Added by ${addedBy || 'Admin'} • Vloxora Shop` })
             .setTimestamp();
 
         await channel.send({
-            content: `<@&${CONFIG.DEALS_ROLE_ID}>\n# 📦 IN STOCK — ${name.toUpperCase()}\n**${qty}x ${rarity || ''} ${name} just dropped into the shop!**`,
+            content: `<@&${CONFIG.DEALS_ROLE_ID}>\n# New Stock — ${name}`,
             embeds: [embed]
         });
 
@@ -865,30 +857,30 @@ app.post('/announce-stock-session', async (req, res) => {
         const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
 
         const rarityColors = { legend: 0xff9900, epic: 0xa855f7, rare: 0xef4444, basic: 0x3b82f6 };
-        const rarityEmojis = { legend: '🌈', epic: '💜', rare: '🔴', basic: '🔵' };
-
         const embeds = [];
 
         // One embed per added item
         if (added && added.length > 0) {
             for (const item of added) {
-                const priceUSD = item.value ? (Number(item.value) * 0.003).toFixed(2) : null;
-                const color = rarityColors[(item.rarity || '').toLowerCase()] || 0x34d399;
-                const rarEmoji = rarityEmojis[(item.rarity || '').toLowerCase()] || '✨';
+                const color    = rarityColors[(item.rarity || '').toLowerCase()] || 0x34d399;
+                const priceUSD = item.value ? `$${Math.max(1, Math.ceil(Number(item.value) * 0.003))}` : null;
+
+                const fields = [
+                    { name: 'Rarity',   value: item.rarity || 'Unknown',   inline: true },
+                    { name: 'Category', value: item.category || 'Unknown', inline: true },
+                ];
+                if (priceUSD) fields.push({ name: 'Price', value: priceUSD, inline: true });
+                fields.push({ name: 'Qty', value: `${item.qty} available`, inline: true });
 
                 const embed = new EmbedBuilder()
-                    .setTitle(`📦  N E W  S T O C K`)
+                    .setAuthor({
+                        name: 'Vloxora Shop',
+                        iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png'
+                    })
+                    .setTitle(item.name)
                     .setColor(color)
-                    .setDescription(
-                        `## ${item.name}\n` +
-                        `> Now available on **[vloxora.com](https://vloxora.com)**\n\u200b`
-                    )
-                    .addFields(
-                        { name: '✨  Rarity',   value: `**${item.rarity || 'Unknown'}**`, inline: true },
-                        { name: '🗂️  Category', value: `**${item.category || 'Unknown'}**`, inline: true },
-                        ...(priceUSD ? [{ name: '💰  Price', value: `**$${priceUSD}**`, inline: true }] : []),
-                        { name: '📦  Qty',      value: `**${item.qty} available**`, inline: true },
-                    )
+                    .setDescription(`Now available on **[vloxora.com](https://vloxora.com)**`)
+                    .addFields(...fields)
                     .setThumbnail(item.image || null)
                     .setFooter({ text: `Added by ${addedBy || 'Admin'} • Vloxora Shop` })
                     .setTimestamp();
@@ -900,12 +892,13 @@ app.post('/announce-stock-session', async (req, res) => {
         // One embed for all removed items
         if (removed && removed.length > 0) {
             const embed = new EmbedBuilder()
-                .setTitle(`📭  R E M O V E D  F R O M  S T O C K`)
+                .setAuthor({
+                    name: 'Vloxora Shop',
+                    iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png'
+                })
+                .setTitle('Removed from Stock')
                 .setColor(0x6b7280)
-                .setDescription(
-                    removed.map(name => `~~${name}~~`).join('\n') +
-                    `\n\n> These items are no longer available in the shop.\n\u200b`
-                )
+                .setDescription(removed.map(name => `~~${name}~~`).join('\n'))
                 .setFooter({ text: `Removed by ${addedBy || 'Admin'} • Vloxora Shop` })
                 .setTimestamp();
 
@@ -913,13 +906,12 @@ app.post('/announce-stock-session', async (req, res) => {
         }
 
         // Build content message
-        const addedNames  = added && added.length  ? added.map(i => i.name).join(', ')  : null;
-        const removedText = removed && removed.length ? `\n📭 **Removed:** ${removed.join(', ')}` : '';
-        const addedText   = addedNames ? `📦 **Added:** ${addedNames}` : '';
+        const addedText   = added?.length   ? `**Added:** ${added.map(i => i.name).join(', ')}` : '';
+        const removedText = removed?.length ? `\n**Removed:** ${removed.join(', ')}` : '';
 
         const content =
             `<@&${CONFIG.DEALS_ROLE_ID}>\n` +
-            `# 🛒 STOCK UPDATE\n` +
+            `# Stock Update\n` +
             `${addedText}${removedText}\n` +
             `**[Shop now → vloxora.com](https://vloxora.com)**`;
 
