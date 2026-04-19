@@ -703,27 +703,25 @@ app.post('/announce-deal', async (req, res) => {
         const origUSD = (Number(originalPrice) * 0.003).toFixed(2);
 
         const embed = new EmbedBuilder()
-            .setTitle('🔥  L I M I T E D  D E A L  D R O P P E D')
+            .setAuthor({
+                name: 'Vloxora Shop',
+                iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png'
+            })
+            .setTitle(itemName)
             .setColor(0xf59e0b)
-            .setDescription(
-                `## ${itemName}\n` +
-                `> A limited time deal is now live on **[vloxora.com](https://vloxora.com)**\n` +
-                `> Don't sleep on this — stock is limited!\n\u200b`
-            )
+            .setDescription(`A limited time deal is now live on **[vloxora.com](https://vloxora.com)**`)
             .addFields(
-                { name: '💸  Deal Price', value: `### $${dealUSD}`, inline: true },
-                { name: '🏷️  Original', value: `### ~~$${origUSD}~~`, inline: true },
-                { name: '🔥  You Save', value: `### ${discount}% OFF`, inline: true },
-                { name: '📦  Stock Left', value: `**${stock} available**`, inline: true },
-                { name: '⚡  Act Fast', value: '**Deals sell out within minutes**', inline: true },
-                { name: '\u200b', value: '> 🛒 **[Grab it now → vloxora.com](https://vloxora.com)**', inline: false }
+                { name: 'Deal Price',  value: `$${dealUSD}`,       inline: true },
+                { name: 'Original',    value: `~~$${origUSD}~~`,    inline: true },
+                { name: 'You Save',    value: `${discount}% off`,   inline: true },
+                { name: 'Stock',       value: `${stock} available`, inline: true }
             )
             .setThumbnail(itemImage || null)
-            .setFooter({ text: 'Vloxora Shop • Vloxy JR', iconURL: 'https://vloxora.com/favicon.png' })
+            .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
             .setTimestamp();
 
         await channel.send({
-            content: `<@&${CONFIG.DEALS_ROLE_ID}>\n# 🔥 NEW DEAL — ${itemName.toUpperCase()}\n**${discount}% off for a limited time — don't miss out!**`,
+            content: `<@&${CONFIG.DEALS_ROLE_ID}>\n# 🔥 NEW DEAL — ${itemName.toUpperCase()}`,
             embeds: [embed]
         });
 
@@ -752,24 +750,22 @@ app.post('/announce-soldout', async (req, res) => {
         const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
 
         const embed = new EmbedBuilder()
-            .setTitle('😔  D E A L  S O L D  O U T')
+            .setAuthor({
+                name: 'Vloxora Shop',
+                iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png'
+            })
+            .setTitle(itemName)
             .setColor(0x6b7280)
-            .setDescription(
-                `## ~~${itemName}~~\n` +
-                `> This deal has officially sold out.\n` +
-                `> Stay tuned — more deals drop regularly on **[vloxora.com](https://vloxora.com)**\n\u200b`
-            )
+            .setDescription(`~~This deal has sold out.~~ Stay tuned — more deals drop regularly on **[vloxora.com](https://vloxora.com)**`)
             .addFields(
-                { name: '📭  Status', value: '**SOLD OUT**', inline: true },
-                { name: '🔔  Don\'t Miss Next Time', value: 'Keep notifications on!', inline: true },
-                { name: '\u200b', value: '> 👀 **[Check vloxora.com for more deals](https://vloxora.com)**', inline: false }
+                { name: 'Status', value: 'Sold Out', inline: true }
             )
             .setThumbnail(itemImage || null)
             .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
             .setTimestamp();
 
         await channel.send({
-            content: `<@&${CONFIG.DEALS_ROLE_ID}>\n# 😔 SOLD OUT — ${itemName.toUpperCase()}`,
+            content: `<@&${CONFIG.DEALS_ROLE_ID}>\n# SOLD OUT — ${itemName.toUpperCase()}`,
             embeds: [embed]
         });
 
