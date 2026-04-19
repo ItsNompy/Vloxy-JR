@@ -1061,6 +1061,92 @@ app.get('/health', (req, res) => {
     res.json({ status: 'online', bot: client.user?.tag || 'starting...', uptime: Math.floor(process.uptime()) + 's' });
 });
 
+// ═══════════════════════════════════════════════════════════
+// BUNDLE ANNOUNCEMENT
+// ═══════════════════════════════════════════════════════════
+
+app.post('/announce-bundle', async (req, res) => {
+    try {
+        if (req.headers.authorization !== `Bearer ${CONFIG.API_SECRET}`) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        const { bundleName, tagline, itemNames, originalTokens, dealTokens, discount, isNew, postedBy } = req.body;
+
+        const guild   = await client.guilds.fetch(CONFIG.GUILD_ID);
+        const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
+
+        const origUSD = Math.max(1, Math.ceil(Number(originalTokens) * 0.003));
+        const dealUSD = Math.max(1, Math.ceil(Number(dealTokens)     * 0.003));
+
+        const fields = [
+            { name: 'Items',    value: (itemNames || []).join('\n') || '—',       inline: true  },
+            { name: 'Price',    value: `$${dealUSD.toLocaleString()}`,            inline: true  },
+            { name: 'Tokens',   value: `${Number(dealTokens).toLocaleString()}`,  inline: true  },
+        ];
+
+        if (discount > 0) {
+            fields.push({ name: 'You Save', value: `${discount}% off  ($${(origUSD - dealUSD).toLocaleString()})`, inline: true });
+        }
+
+        fields.push({ name: '\u200b', value: '[Browse all bundles → vloxora.com/bundles](https://vloxora.com/bundles)', inline: false });
+
+        const embed = new EmbedBuilder()
+            .setAuthor({ name: 'Vloxora Bundles', iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png' })
+            .setTitle(bundleName)
+            .setColor(0x6366f1)
+            .setDescription(tagline || `A new bundle is now available on **[vloxora.com](https://vloxora.com)**`)
+            .addFields(...fields)
+            .setFooter({ text: `${isNew ? 'Added' : 'Updated'} by ${postedBy || 'Admin'} • Vloxora Shop` })
+            .setTimestamp();
+
+        await channel.send({
+            content: `<@&${CONFIG.DEALS_ROLE_ID}>\n# ${isNew ? 'New Bundle' : 'Bundle Updated'} — ${bundleName}`,
+            embeds: [embed]
+        });
+
+        console.log(`✅ Bundle announced: "${bundleName}" by ${postedBy}`);
+        res.json({ success: true });
+
+    } catch (error) {
+        console.error('❌ Bundle announce error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/announce-bundle-removed', async (req, res) => {
+    try {
+        if (req.headers.authorization !== `Bearer ${CONFIG.API_SECRET}`) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        const { bundleName, removedBy } = req.body;
+
+        const guild   = await client.guilds.fetch(CONFIG.GUILD_ID);
+        const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
+
+        const embed = new EmbedBuilder()
+            .setAuthor({ name: 'Vloxora Bundles', iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png' })
+            .setTitle(bundleName)
+            .setColor(0x374151)
+            .setDescription(`~~This bundle has been removed.~~ Check **[vloxora.com/bundles](https://vloxora.com/bundles)** for available packs.`)
+            .setFooter({ text: `Removed by ${removedBy || 'Admin'} • Vloxora Shop` })
+            .setTimestamp();
+
+        await channel.send({
+            content: `<@&${CONFIG.DEALS_ROLE_ID}>\n# Bundle Removed — ${bundleName}`,
+            embeds: [embed]
+        });
+
+        console.log(`✅ Bundle removal announced: "${bundleName}" by ${removedBy}`);
+        res.json({ success: true });
+
+    } catch (error) {
+        console.error('❌ Bundle remove announce error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 const PORT = parseInt(process.env.PORT) || 3000;
 console.log(`🔌 Starting server on port ${PORT}...`);
 
