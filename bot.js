@@ -699,8 +699,10 @@ app.post('/announce-deal', async (req, res) => {
         const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
         const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
 
-        const dealUSD = (Number(dealPrice) * 0.003).toFixed(2);
-        const origUSD = (Number(originalPrice) * 0.003).toFixed(2);
+        // originalPrice arrives as USD already (converted on frontend)
+        // dealPrice arrives as tokens — convert at $3/1k then round up, min $1
+        const dealUSD = Math.max(1, Math.ceil(Number(dealPrice) * 0.003));
+        const origUSD = Math.max(1, Math.ceil(Number(originalPrice)));
 
         const embed = new EmbedBuilder()
             .setAuthor({
@@ -711,10 +713,10 @@ app.post('/announce-deal', async (req, res) => {
             .setColor(0xf59e0b)
             .setDescription(`A limited time deal is now live on **[vloxora.com](https://vloxora.com)**`)
             .addFields(
-                { name: 'Deal Price',  value: `$${dealUSD}`,       inline: true },
-                { name: 'Original',    value: `~~$${origUSD}~~`,    inline: true },
-                { name: 'You Save',    value: `${discount}% off`,   inline: true },
-                { name: 'Stock',       value: `${stock} available`, inline: true }
+                { name: 'Deal Price',  value: `$${dealUSD.toLocaleString()}`,     inline: true },
+                { name: 'Original',    value: `~~$${origUSD.toLocaleString()}~~`,  inline: true },
+                { name: 'You Save',    value: `${discount}% off`,                  inline: true },
+                { name: 'Stock',       value: `${stock} available`,                inline: true }
             )
             .setThumbnail(itemImage || null)
             .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
