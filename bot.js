@@ -30,6 +30,7 @@ const CONFIG = {
     DEALS_CHANNEL_ID: '1493789475489189898',
     DEALS_ROLE_ID: '1493867173683400865',
     CHANGES_CHANNEL_ID: '1494041831263043684',
+    CHANGES_ROLE_ID: '1493867314565877831',
     API_SECRET: process.env.API_SECRET
 };
 
@@ -328,7 +329,18 @@ app.post('/announce-value-change', async (req, res) => {
             });
         }
 
-        await channel.send({ embeds: [embed] });
+        const valueTag  = valueChanged  ? `${valueWent} **${(oldValue||0).toLocaleString()} → ${(newValue||0).toLocaleString()} tokens**` : null;
+        const demandTag = demandChanged ? `${demandWent} Demand **${oldDemand} → ${newDemand}**` : null;
+        const changeSummary = [valueTag, demandTag].filter(Boolean).join('  ·  ');
+
+        await channel.send({
+            content:
+                `<@&${CONFIG.CHANGES_ROLE_ID}>\n` +
+                `# 📊 VALUE UPDATE — ${itemName.toUpperCase()}\n` +
+                (changeSummary ? `${changeSummary}\n` : '') +
+                `**Updated by ${changedBy || 'Admin'} · [vloxora.com](https://vloxora.com)**`,
+            embeds: [embed]
+        });
 
         console.log(`✅ Value change announced: ${itemName} by ${changedBy}`);
         res.json({ success: true });
