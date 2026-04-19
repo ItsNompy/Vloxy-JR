@@ -1131,7 +1131,7 @@ app.post('/create-cashout', async (req, res) => {
         const itemsList = items.map(item =>
             item.price > 0
                 ? `${item.name}  ×${item.quantity}  —  asking **$${Number(item.price).toLocaleString()}**`
-                : `${item.name}  ×${item.quantity}  —  *no price set*`
+                : `${item.name}  ×${item.quantity}  —  *N/A (open to offer)*`
         ).join('\n');
 
         const embed = new EmbedBuilder()
