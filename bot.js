@@ -77,14 +77,21 @@ client.once('clientReady', async () => {
 // ═══════════════════════════════════════════════════════════
 // GIVEAWAY STATE
 // ═══════════════════════════════════════════════════════════
-const activeGiveaways = new Map(); // messageId → { prize, endsAt, winners, hostedBy, entrants: Set, timerInterval, endTimeout, channelId }
+
+// messageId → { prize, endsAt, winnersCount, hostedBy, channelId,
+//               entrants: Map<userId, { tag, entries }>,
+//               timerInterval, endTimeout }
+const activeGiveaways = new Map();
+
+const GIVEAWAY_ROLE_ID  = '1495289844598046720';
+const BOOSTER_ROLE_ID   = '1480291522401271985';
 
 function parseDuration(str) {
     const match = str.trim().match(/^(\d+)\s*(s|m|h|d)$/i);
     if (!match) return null;
-    const n = parseInt(match[1]);
+    const n    = parseInt(match[1]);
     const unit = match[2].toLowerCase();
-    const ms = { s: 1000, m: 60000, h: 3600000, d: 86400000 }[unit];
+    const ms   = { s: 1000, m: 60000, h: 3600000, d: 86400000 }[unit];
     return n * ms;
 }
 
@@ -94,26 +101,66 @@ function formatTimeRemaining(ms) {
     const m = Math.floor(s / 60);
     const h = Math.floor(m / 60);
     const d = Math.floor(h / 24);
-    if (d > 0)  return `${d}d ${h % 24}h ${m % 60}m`;
-    if (h > 0)  return `${h}h ${m % 60}m ${s % 60}s`;
-    if (m > 0)  return `${m}m ${s % 60}s`;
+    if (d > 0) return `${d}d ${h % 24}h ${m % 60}m`;
+    if (h > 0) return `${h}h ${m % 60}m ${s % 60}s`;
+    if (m > 0) return `${m}m ${s % 60}s`;
     return `${s}s`;
 }
 
-function buildGiveawayEmbed(prize, hostedBy, winnersCount, endsAt, entrantCount) {
-    const remaining = endsAt - Date.now();
-    return new EmbedBuilder()
-        .setAuthor({ name: 'Vloxora Giveaway', iconURL: `https://cdn.discordapp.com/emojis/1493842549289386074.png` })
-        .setTitle(prize)
-        .setColor(0x6366f1)
-        .addFields(
-            { name: 'Ends In',   value: formatTimeRemaining(remaining), inline: true },
-            { name: 'Winners',   value: `${winnersCount}`,              inline: true },
-            { name: 'Hosted By', value: hostedBy,                       inline: true },
-            { name: 'Entries',   value: `${entrantCount}`,              inline: true }
+function totalEntries(entrantsMap) {
+    let t = 0;
+    for (const e of entrantsMap.values()) t += e.entries;
+    return t;
+}
+
+function buildGiveawayRow(active = true) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId('giveaway_enter')
+            .setLabel(active ? 'Enter Giveaway' : 'Giveaway Ended')
+            .setStyle(active ? ButtonStyle.Primary : ButtonStyle.Secondary)
+            .setDisabled(!active),
+        new ButtonBuilder()
+            .setCustomId('giveaway_participants')
+            .setLabel('Participants')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(false)
+    );
+}
+
+function buildGiveawayEmbed(gw, ended = false) {
+    const remaining   = gw.endsAt - Date.now();
+    const uniqueCount = gw.entrants.size;
+    const ticketCount = totalEntries(gw.entrants);
+
+    const embed = new EmbedBuilder()
+        .setAuthor({
+            name: 'Vloxora Giveaway',
+            iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png'
+        })
+        .setTitle(gw.prize)
+        .setColor(ended ? 0x374151 : 0x6366f1)
+        .setDescription(
+            ended
+                ? `This giveaway has ended. Thank you to everyone who entered!`
+                : `Press **Enter Giveaway** to join.\nServer Boosters receive **2× entries** automatically.`
         )
-        .setFooter({ text: `Ends at` })
-        .setTimestamp(endsAt);
+        .addFields(
+            {
+                name: ended ? 'Status' : 'Time Remaining',
+                value: ended ? 'Ended' : formatTimeRemaining(remaining),
+                inline: true
+            },
+            { name: 'Winners',    value: `${gw.winnersCount}`,  inline: true },
+            { name: 'Hosted By',  value: gw.hostedBy,           inline: true },
+            { name: 'Participants', value: `${uniqueCount}`,    inline: true },
+            { name: 'Total Entries', value: `${ticketCount}`,   inline: true },
+            { name: '\u200b',     value: '\u200b',              inline: true }
+        )
+        .setFooter({ text: ended ? 'Ended at' : 'Ends at' })
+        .setTimestamp(ended ? Date.now() : gw.endsAt);
+
+    return embed;
 }
 
 async function endGiveaway(messageId) {
@@ -125,54 +172,49 @@ async function endGiveaway(messageId) {
     activeGiveaways.delete(messageId);
 
     try {
-        const guild  = await client.guilds.fetch(CONFIG.GUILD_ID);
-        const ch     = await guild.channels.fetch(gw.channelId);
-        const msg    = await ch.messages.fetch(messageId);
+        const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
+        const ch    = await guild.channels.fetch(gw.channelId);
+        const msg   = await ch.messages.fetch(messageId);
 
-        const entrants = [...gw.entrants];
-        const winnerIds = [];
-
-        const pool = [...entrants];
-        const count = Math.min(gw.winnersCount, pool.length);
-        for (let i = 0; i < count; i++) {
-            const idx = Math.floor(Math.random() * pool.length);
-            winnerIds.push(pool.splice(idx, 1)[0]);
+        // Build weighted pool — boosters already have 2 entries recorded
+        const pool = [];
+        for (const [userId, data] of gw.entrants) {
+            for (let i = 0; i < data.entries; i++) pool.push(userId);
         }
 
-        const disabledRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId('giveaway_enter')
-                .setLabel(`${entrants.length} entered`)
-                .setStyle(ButtonStyle.Secondary)
-                .setDisabled(true)
-        );
+        const winnerIds = [];
+        const poolCopy  = [...pool];
+        const count     = Math.min(gw.winnersCount, [...gw.entrants.keys()].length);
+        const picked    = new Set();
+        while (picked.size < count && poolCopy.length > 0) {
+            const idx    = Math.floor(Math.random() * poolCopy.length);
+            const winner = poolCopy.splice(idx, 1)[0];
+            if (!picked.has(winner)) { picked.add(winner); winnerIds.push(winner); }
+        }
 
-        const endedEmbed = new EmbedBuilder()
-            .setAuthor({ name: 'Vloxora Giveaway', iconURL: `https://cdn.discordapp.com/emojis/1493842549289386074.png` })
-            .setTitle(gw.prize)
-            .setColor(0x374151)
-            .addFields(
-                { name: 'Status',    value: 'Ended',          inline: true },
-                { name: 'Winners',   value: `${gw.winnersCount}`, inline: true },
-                { name: 'Hosted By', value: gw.hostedBy,      inline: true },
-                { name: 'Entries',   value: `${entrants.length}`, inline: true }
-            )
-            .setFooter({ text: 'Ended at' })
-            .setTimestamp();
-
-        await msg.edit({ embeds: [endedEmbed], components: [disabledRow] });
+        // Edit original message to ended state
+        await msg.edit({
+            embeds:     [buildGiveawayEmbed(gw, true)],
+            components: [buildGiveawayRow(false)]
+        });
 
         if (winnerIds.length === 0) {
-            await ch.send({ content: `**${gw.prize}** — No valid entries, no winners this time.`, reply: { messageReference: messageId } });
+            await ch.send({
+                content: `**${gw.prize}** — Nobody entered so there are no winners this time.`,
+                reply: { messageReference: messageId }
+            });
         } else {
             const mentions = winnerIds.map(id => `<@${id}>`).join(', ');
             await ch.send({
-                content: `Congratulations ${mentions}! You won **${gw.prize}**! Please open a ticket on vloxora.com to claim your prize.`,
+                content:
+                    `${mentions}\n\n` +
+                    `Congratulations, you won **${gw.prize}**!\n` +
+                    `Head over to **vloxora.com** and open a ticket to claim your prize.`,
                 reply: { messageReference: messageId }
             });
         }
 
-        console.log(`✅ Giveaway ended: ${gw.prize} — winners: ${winnerIds.join(', ') || 'none'}`);
+        console.log(`✅ Giveaway ended: "${gw.prize}" — winners: ${winnerIds.join(', ') || 'none'}`);
     } catch (err) {
         console.error('❌ Error ending giveaway:', err);
     }
@@ -181,31 +223,69 @@ async function endGiveaway(messageId) {
 // Handle slash commands and buttons
 client.on('interactionCreate', async (interaction) => {
 
-    // Handle giveaway enter button
+    // ── Giveaway: Enter / Leave ──────────────────────────────
     if (interaction.isButton() && interaction.customId === 'giveaway_enter') {
         const gw = activeGiveaways.get(interaction.message.id);
         if (!gw) return interaction.reply({ content: 'This giveaway has already ended.', ephemeral: true });
 
-        const userId = interaction.user.id;
+        const userId   = interaction.user.id;
+        const isBooster = interaction.member?.roles?.cache?.has(BOOSTER_ROLE_ID) ?? false;
+        const entries  = isBooster ? 2 : 1;
+
         if (gw.entrants.has(userId)) {
             gw.entrants.delete(userId);
             await interaction.reply({ content: 'You have left the giveaway.', ephemeral: true });
         } else {
-            gw.entrants.add(userId);
-            await interaction.reply({ content: 'You have entered the giveaway! Good luck.', ephemeral: true });
+            gw.entrants.set(userId, { tag: interaction.user.tag, entries });
+            const boosterNote = isBooster ? ' You have **2× entries** as a Server Booster.' : '';
+            await interaction.reply({ content: `You're in! Good luck.${boosterNote}`, ephemeral: true });
         }
 
-        // Update entry count on embed immediately
         try {
-            const updatedEmbed = buildGiveawayEmbed(gw.prize, gw.hostedBy, gw.winnersCount, gw.endsAt, gw.entrants.size);
-            const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder()
-                    .setCustomId('giveaway_enter')
-                    .setLabel('Enter Giveaway')
-                    .setStyle(ButtonStyle.Primary)
-            );
-            await interaction.message.edit({ embeds: [updatedEmbed], components: [row] });
+            await interaction.message.edit({
+                embeds:     [buildGiveawayEmbed(gw)],
+                components: [buildGiveawayRow(true)]
+            });
         } catch (e) { console.error('Embed update error:', e); }
+        return;
+    }
+
+    // ── Giveaway: View Participants ──────────────────────────
+    if (interaction.isButton() && interaction.customId === 'giveaway_participants') {
+        const msgId = interaction.message.id;
+        // Check both active and (recently) ended — find the message context
+        const gw = activeGiveaways.get(msgId);
+
+        // If giveaway is gone from memory, we can't list — still respond gracefully
+        if (!gw) {
+            return interaction.reply({ content: 'Participant data is no longer available for this giveaway.', ephemeral: true });
+        }
+
+        if (gw.entrants.size === 0) {
+            return interaction.reply({ content: 'No one has entered yet.', ephemeral: true });
+        }
+
+        const lines = [];
+        let i = 1;
+        for (const [userId, data] of gw.entrants) {
+            const boosterTag = data.entries === 2 ? ' ⭐' : '';
+            lines.push(`${i}. <@${userId}>${boosterTag} — ${data.entries} entr${data.entries === 1 ? 'y' : 'ies'}`);
+            i++;
+        }
+
+        // Discord ephemeral messages cap at 2000 chars — chunk if needed
+        const chunks = [];
+        let current  = `**Participants — ${gw.prize}** (${gw.entrants.size} unique · ${totalEntries(gw.entrants)} total entries)\n\n`;
+        for (const line of lines) {
+            if ((current + line + '\n').length > 1900) {
+                chunks.push(current);
+                current = '';
+            }
+            current += line + '\n';
+        }
+        if (current) chunks.push(current);
+
+        await interaction.reply({ content: chunks[0], ephemeral: true });
         return;
     }
 
@@ -275,10 +355,10 @@ client.on('interactionCreate', async (interaction) => {
 
     // /giveaway — start a giveaway
     if (interaction.commandName === 'giveaway') {
-        const prize      = interaction.options.getString('prize');
-        const durationRaw = interaction.options.getString('duration');
+        const prize        = interaction.options.getString('prize');
+        const durationRaw  = interaction.options.getString('duration');
         const winnersCount = interaction.options.getInteger('winners');
-        const hostedBy   = interaction.options.getString('hosted_by') || interaction.member.displayName;
+        const hostedBy     = interaction.options.getString('hosted_by') || interaction.member.displayName;
 
         const durationMs = parseDuration(durationRaw);
         if (!durationMs || durationMs < 10000) {
@@ -292,38 +372,30 @@ client.on('interactionCreate', async (interaction) => {
         const guild  = await client.guilds.fetch(CONFIG.GUILD_ID);
         const ch     = await guild.channels.fetch(CONFIG.GIVEAWAY_CHANNEL_ID);
 
-        const embed = buildGiveawayEmbed(prize, hostedBy, winnersCount, endsAt, 0);
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId('giveaway_enter')
-                .setLabel('Enter Giveaway')
-                .setStyle(ButtonStyle.Primary)
-        );
-
-        const msg = await ch.send({ content: `@everyone`, embeds: [embed], components: [row] });
-
         const gwData = {
             prize,
             hostedBy,
             winnersCount,
             endsAt,
-            entrants: new Set(),
+            entrants: new Map(),   // userId → { tag, entries }
             channelId: ch.id,
             timerInterval: null,
             endTimeout: null
         };
 
+        const msg = await ch.send({
+            content: `<@&${GIVEAWAY_ROLE_ID}>`,
+            embeds:     [buildGiveawayEmbed(gwData)],
+            components: [buildGiveawayRow(true)]
+        });
+
         // Live timer — update embed every 20s
         gwData.timerInterval = setInterval(async () => {
             try {
-                const liveEmbed = buildGiveawayEmbed(prize, hostedBy, winnersCount, endsAt, gwData.entrants.size);
-                const liveRow = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('giveaway_enter')
-                        .setLabel('Enter Giveaway')
-                        .setStyle(ButtonStyle.Primary)
-                );
-                await msg.edit({ embeds: [liveEmbed], components: [liveRow] });
+                await msg.edit({
+                    embeds:     [buildGiveawayEmbed(gwData)],
+                    components: [buildGiveawayRow(true)]
+                });
             } catch (e) { console.error('Timer update error:', e); }
         }, 20000);
 
