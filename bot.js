@@ -1062,6 +1062,120 @@ app.get('/health', (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════
+// CREATE CASHOUT TICKET
+// ═══════════════════════════════════════════════════════════
+const CASHOUT_CATEGORY_ID = '1495518295187525722';
+
+app.post('/create-cashout', async (req, res) => {
+    try {
+        if (req.headers.authorization !== `Bearer ${CONFIG.API_SECRET}`) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+
+        const { discordId, discordUsername, userId, items, total } = req.body;
+
+        if (!discordId && !discordUsername) {
+            return res.status(400).json({ error: 'Missing Discord info' });
+        }
+        if (!items || items.length === 0) {
+            return res.status(400).json({ error: 'No items in cashout' });
+        }
+
+        const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
+        if (!guild) return res.status(500).json({ error: 'Bot not in server' });
+
+        await guild.members.fetch();
+
+        let member = null;
+        if (discordId) {
+            try { member = await guild.members.fetch(discordId); } catch (e) {}
+        }
+        if (!member && discordUsername) {
+            member = guild.members.cache.find(m =>
+                m.user.username.toLowerCase() === discordUsername.toLowerCase() ||
+                m.user.globalName?.toLowerCase() === discordUsername.toLowerCase()
+            );
+        }
+        if (!member) {
+            return res.status(404).json({
+                error: 'not_in_server',
+                message: `Could not find "${discordUsername}" in the server.`
+            });
+        }
+
+        const ticketNumber = Date.now().toString().slice(-6);
+        const safeName = member.user.username.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const channelName = `cashout-${safeName}-${ticketNumber}`;
+
+        const channel = await guild.channels.create({
+            name: channelName,
+            type: 0,
+            parent: CASHOUT_CATEGORY_ID,
+            permissionOverwrites: [
+                { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+                {
+                    id: member.id,
+                    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
+                },
+                {
+                    id: CONFIG.STAFF_ROLE_ID,
+                    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages]
+                },
+                {
+                    id: client.user.id,
+                    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
+                }
+            ]
+        });
+
+        const itemsList = items.map(item =>
+            `${item.name}  ×${item.quantity}  —  $${Number(item.price).toLocaleString()}`
+        ).join('\n');
+
+        const embed = new EmbedBuilder()
+            .setAuthor({ name: 'Vloxora Cashout', iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png' })
+            .setTitle('New Cashout Request')
+            .setColor(0x22c55e)
+            .addFields(
+                { name: 'Seller',     value: `${member} (@${member.user.username})`, inline: false },
+                { name: 'Items',      value: itemsList,                               inline: false },
+                { name: 'Est. Value', value: `$${Number(total).toLocaleString()}`,    inline: true  },
+                { name: 'Request ID', value: `#${ticketNumber}`,                      inline: true  },
+                { name: 'Date',       value: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }), inline: true }
+            )
+            .setFooter({ text: 'Vloxora Cashout • Vloxy JR' })
+            .setTimestamp();
+
+        await channel.send({ content: `<@&${CONFIG.STAFF_ROLE_ID}>`, embeds: [embed] });
+
+        await channel.send(
+            `Hey ${member}!\n\n` +
+            `Thanks for your cashout request. An owner will review it shortly.\n\n` +
+            `**What happens next:**\n` +
+            `1. A staff member will review your items and confirm the offer\n` +
+            `2. Once agreed, you'll send the items in-game\n` +
+            `3. You'll receive your payment\n\n` +
+            `Please sit tight!`
+        );
+
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('close_ticket')
+                .setLabel('Close Ticket')
+                .setStyle(ButtonStyle.Danger)
+        );
+        await channel.send({ components: [row] });
+
+        console.log(`✅ Cashout ticket: #${channelName} for ${member.user.username} — est. $${total}`);
+        res.json({ success: true, channelId: channel.id, channelName: channel.name, ticketNumber });
+
+    } catch (error) {
+        console.error('❌ Cashout error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════
 // BUNDLE ANNOUNCEMENT
 // ═══════════════════════════════════════════════════════════
 
