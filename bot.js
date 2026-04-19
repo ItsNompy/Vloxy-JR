@@ -699,10 +699,9 @@ app.post('/announce-deal', async (req, res) => {
         const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
         const channel = await guild.channels.fetch(CONFIG.DEALS_CHANNEL_ID);
 
-        // originalPrice arrives as USD already (converted on frontend)
-        // dealPrice arrives as tokens — convert at $3/1k then round up, min $1
+        // Both arrive as token values — convert at $3/1k, ceil to whole dollar, min $1
         const dealUSD = Math.max(1, Math.ceil(Number(dealPrice) * 0.003));
-        const origUSD = Math.max(1, Math.ceil(Number(originalPrice)));
+        const origUSD = Math.max(1, Math.ceil(Number(originalPrice) * 0.003));
 
         const embed = new EmbedBuilder()
             .setAuthor({
