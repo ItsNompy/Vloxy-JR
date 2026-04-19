@@ -482,49 +482,51 @@ app.post('/create-ticket', async (req, res) => {
         });
 
         const itemsList = items.map(item =>
-            `• **${item.name}** x${item.quantity} — $${Number(item.price).toLocaleString()}`
+            `${item.name}  ×${item.quantity}  —  $${Number(item.price).toLocaleString()}`
         ).join('\n');
 
         const embed = new EmbedBuilder()
-            .setTitle('🛒 New Order — Vloxora')
-            .setColor(0xec4899)
+            .setAuthor({
+                name: 'Vloxora Shop',
+                iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png'
+            })
+            .setTitle('New Order')
+            .setColor(0x6366f1)
             .addFields(
-                { name: '👤 Customer', value: `${member} (@${member.user.username})`, inline: false },
-                { name: '📦 Items Ordered', value: itemsList, inline: false },
-                { name: '💰 Total', value: `$${Number(total).toLocaleString()}`, inline: true },
-                { name: '🆔 Order ID', value: `#${ticketNumber}`, inline: true },
-                { name: '📅 Date', value: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }), inline: true }
+                { name: 'Customer',   value: `${member} (@${member.user.username})`, inline: false },
+                { name: '\u200b',     value: '\u200b',                               inline: false },
+                { name: 'Items',      value: itemsList,                              inline: false },
+                { name: '\u200b',     value: '\u200b',                               inline: false },
+                { name: 'Total',      value: `$${Number(total).toLocaleString()}`,   inline: true  },
+                { name: 'Order ID',   value: `#${ticketNumber}`,                     inline: true  },
+                { name: 'Date',       value: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }), inline: true }
             )
             .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
             .setTimestamp();
 
         await channel.send({
-            content: `<@&${CONFIG.STAFF_ROLE_ID}> ${member} — new order!`,
+            content: `<@&${CONFIG.STAFF_ROLE_ID}>`,
             embeds: [embed]
         });
 
         await channel.send(
-            `Hey ${member}! 👋\n\n` +
-            `Thanks for your order! A staff member will be with you shortly.\n\n` +
+            `Hey ${member}!\n\n` +
+            `Thanks for your order. An owner will be with you shortly.\n\n` +
             `**What happens next:**\n` +
-            `1. Staff will confirm and verify your order\n` +
+            `1. Your order will be confirmed and verified\n` +
             `2. Payment will be arranged\n` +
             `3. You'll receive your items in-game\n\n` +
-            `Please stay here and wait for a staff member!`
+            `Please stay here and sit tight!`
         );
 
-        // Send close button for staff
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId('close_ticket')
-                .setLabel('🔒 Close Ticket')
+                .setLabel('Close Ticket')
                 .setStyle(ButtonStyle.Danger)
         );
 
-        await channel.send({
-            content: `**Staff:** Use the button below or \`/close\` to close this ticket when complete.`,
-            components: [row]
-        });
+        await channel.send({ components: [row] });
 
         console.log(`✅ Ticket created: #${channelName} for ${member.user.username} — $${total}`);
 
