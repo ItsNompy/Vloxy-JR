@@ -272,7 +272,7 @@ app.post('/announce-value-change', async (req, res) => {
             return res.status(401).json({ error: 'Unauthorized' });
         }
 
-        const { itemName, itemImage, itemRarity, oldValue, newValue, oldDemand, newDemand, reason, proofUrls, changedBy } = req.body;
+        const { itemName, itemImage, itemRarity, oldValue, newValue, oldDemand, newDemand, reason, changedBy } = req.body;
 
         const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
         const channel = await guild.channels.fetch(CONFIG.CHANGES_CHANNEL_ID);
@@ -285,60 +285,55 @@ app.post('/announce-value-change', async (req, res) => {
         };
         const color = rarityColors[(itemRarity || '').toLowerCase()] || 0x818cf8;
 
-        // Value change
-        const valueChanged  = newValue !== oldValue;
-        const demandChanged = newDemand !== oldDemand;
-        const valueWent     = newValue > oldValue ? '📈' : '📉';
-        const demandWent    = newDemand > oldDemand ? '📈' : '📉';
+        const valueChanged  = oldValue  !== newValue;
+        const demandChanged = oldDemand !== newDemand;
 
-        // Demand stars display
-        const starDisplay = (n) => '⭐'.repeat(Math.min(n || 0, 5)) || 'None';
+        // Demand label mapping (1–5 → text)
+        const demandLabel = (n) => {
+            const map = { 5: 'Fantastic', 4: 'Good', 3: 'Medium', 2: 'Low', 1: 'Poor' };
+            return map[n] || 'None';
+        };
 
         const fields = [];
 
         if (valueChanged) {
-            fields.push({ name: '\u200b', value: `${valueWent}  **Value Change**\n${(oldValue||0).toLocaleString()} tokens  →  **${(newValue||0).toLocaleString()} tokens**`, inline: false });
-        }
-        if (demandChanged) {
-            fields.push({ name: '\u200b', value: `${demandWent}  **Demand Change**\n${starDisplay(oldDemand)}  →  **${starDisplay(newDemand)}**`, inline: false });
-        }
-
-        fields.push({ name: '\u200b', value: `📋  **Admin Reasoning**\n${reason}`, inline: false });
-        fields.push({ name: '\u200b', value: `👤  **Updated By**\n${changedBy || 'Admin'}`, inline: false });
-        fields.push({ name: '\u200b', value: `> 📊 **[View on vloxora.com](https://vloxora.com)**`, inline: false });
-
-        const embed = new EmbedBuilder()
-            .setTitle(`📊  VALUE UPDATE — ${itemName.toUpperCase()}`)
-            .setColor(color)
-            .setDescription(
-                `> **${itemName}** has been reviewed and updated by staff.\n\u200b`
-            )
-            .addFields(...fields)
-            .setThumbnail(itemImage || null)
-            .setFooter({ text: `Vloxora Value Team • Vloxy JR` })
-            .setTimestamp();
-
-        // If proof images were uploaded add them
-        const files = [];
-        if (proofUrls && proofUrls.length > 0) {
-            embed.addFields({
-                name: '\u200b',
-                value: `📸  **Proof** (${proofUrls.length} screenshot${proofUrls.length > 1 ? 's' : ''})\n` +
-                    proofUrls.map((u, i) => `[Screenshot ${i + 1}](${u})`).join('  ·  '),
-                inline: false
+            fields.push({
+                name: 'Value',
+                value: `${(oldValue || 0).toLocaleString()}  →  **${(newValue || 0).toLocaleString()}** tokens`,
+                inline: true
             });
         }
 
-        const valueTag  = valueChanged  ? `${valueWent} **${(oldValue||0).toLocaleString()} → ${(newValue||0).toLocaleString()} tokens**` : null;
-        const demandTag = demandChanged ? `${demandWent} Demand **${oldDemand} → ${newDemand}**` : null;
-        const changeSummary = [valueTag, demandTag].filter(Boolean).join('  ·  ');
+        if (demandChanged) {
+            fields.push({
+                name: 'Demand',
+                value: `${demandLabel(oldDemand)}  →  **${demandLabel(newDemand)}**`,
+                inline: true
+            });
+        }
+
+        if (fields.length > 0) fields.push({ name: '\u200b', value: '\u200b', inline: false });
+
+        fields.push({
+            name: 'Reasoning',
+            value: reason || 'No reason provided.',
+            inline: false
+        });
+
+        const embed = new EmbedBuilder()
+            .setAuthor({
+                name: 'Vloxora Value Changes',
+                iconURL: `https://cdn.discordapp.com/emojis/1493842549289386074.png`
+            })
+            .setTitle(itemName)
+            .setColor(color)
+            .addFields(...fields)
+            .setThumbnail(itemImage || null)
+            .setFooter({ text: `Updated by ${changedBy || 'Admin'}` })
+            .setTimestamp();
 
         await channel.send({
-            content:
-                `<@&${CONFIG.CHANGES_ROLE_ID}>\n` +
-                `# 📊 VALUE UPDATE — ${itemName.toUpperCase()}\n` +
-                (changeSummary ? `${changeSummary}\n` : '') +
-                `**Updated by ${changedBy || 'Admin'} · [vloxora.com](https://vloxora.com)**`,
+            content: `<@&${CONFIG.CHANGES_ROLE_ID}>`,
             embeds: [embed]
         });
 
