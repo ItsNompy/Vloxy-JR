@@ -277,16 +277,20 @@ app.post('/announce-value-change', async (req, res) => {
         const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
         const channel = await guild.channels.fetch(CONFIG.CHANGES_CHANNEL_ID);
 
-        const rarityColors = {
-            legend: 0xff9900,
-            epic:   0xa855f7,
-            rare:   0xef4444,
-            basic:  0x3b82f6
-        };
-        const color = rarityColors[(itemRarity || '').toLowerCase()] || 0x818cf8;
-
         const valueChanged  = oldValue  !== newValue;
         const demandChanged = oldDemand !== newDemand;
+
+        // Green if anything went up, red if anything went down, grey if neutral
+        const valueUp  = valueChanged  && newValue  > oldValue;
+        const valueDown = valueChanged && newValue  < oldValue;
+        const demandUp  = demandChanged && newDemand > oldDemand;
+        const demandDown = demandChanged && newDemand < oldDemand;
+        const anyUp   = valueUp  || demandUp;
+        const anyDown = valueDown || demandDown;
+        const color = anyUp && !anyDown ? 0x22c55e   // all gains → green
+                    : anyDown && !anyUp ? 0xef4444   // all losses → red
+                    : anyUp && anyDown  ? 0xf59e0b   // mixed → amber
+                    : 0x818cf8;                      // no change → indigo
 
         // Demand label mapping (1–5 → text)
         const demandLabel = (n) => {
