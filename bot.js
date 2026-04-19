@@ -272,7 +272,11 @@ app.post('/announce-value-change', async (req, res) => {
             return res.status(401).json({ error: 'Unauthorized' });
         }
 
-        const { itemName, itemImage, itemRarity, oldValue, newValue, oldDemand, newDemand, reason, changedBy } = req.body;
+        const { itemName, itemImage, itemRarity, reason, changedBy } = req.body;
+        const oldValue  = Number(req.body.oldValue)  || 0;
+        const newValue  = Number(req.body.newValue)  || 0;
+        const oldDemand = Number(req.body.oldDemand) || 0;
+        const newDemand = Number(req.body.newDemand) || 0;
 
         const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
         const channel = await guild.channels.fetch(CONFIG.CHANGES_CHANNEL_ID);
