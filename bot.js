@@ -31,6 +31,7 @@ const CONFIG = {
     DEALS_ROLE_ID: '1493867173683400865',
     CHANGES_CHANNEL_ID: '1494041831263043684',
     CHANGES_ROLE_ID: '1493867314565877831',
+    GIVEAWAY_CHANNEL_ID: '1493779765184692406',
     API_SECRET: process.env.API_SECRET
 };
 
@@ -54,6 +55,14 @@ client.once('clientReady', async () => {
             .setDescription('Remove a user from this ticket')
             .addUserOption(opt => opt.setName('user').setDescription('User to remove').setRequired(true))
             .toJSON(),
+        new SlashCommandBuilder()
+            .setName('giveaway')
+            .setDescription('Start a giveaway in the giveaways channel')
+            .addStringOption(opt => opt.setName('prize').setDescription('What are you giving away?').setRequired(true))
+            .addStringOption(opt => opt.setName('duration').setDescription('Duration e.g. 10m, 1h, 2d').setRequired(true))
+            .addIntegerOption(opt => opt.setName('winners').setDescription('Number of winners').setRequired(true).setMinValue(1).setMaxValue(10))
+            .addStringOption(opt => opt.setName('hosted_by').setDescription('Who is hosting? (defaults to your name)').setRequired(false))
+            .toJSON(),
     ];
 
     try {
@@ -65,8 +74,140 @@ client.once('clientReady', async () => {
     }
 });
 
+// ═══════════════════════════════════════════════════════════
+// GIVEAWAY STATE
+// ═══════════════════════════════════════════════════════════
+const activeGiveaways = new Map(); // messageId → { prize, endsAt, winners, hostedBy, entrants: Set, timerInterval, endTimeout, channelId }
+
+function parseDuration(str) {
+    const match = str.trim().match(/^(\d+)\s*(s|m|h|d)$/i);
+    if (!match) return null;
+    const n = parseInt(match[1]);
+    const unit = match[2].toLowerCase();
+    const ms = { s: 1000, m: 60000, h: 3600000, d: 86400000 }[unit];
+    return n * ms;
+}
+
+function formatTimeRemaining(ms) {
+    if (ms <= 0) return 'Ended';
+    const s = Math.floor(ms / 1000);
+    const m = Math.floor(s / 60);
+    const h = Math.floor(m / 60);
+    const d = Math.floor(h / 24);
+    if (d > 0)  return `${d}d ${h % 24}h ${m % 60}m`;
+    if (h > 0)  return `${h}h ${m % 60}m ${s % 60}s`;
+    if (m > 0)  return `${m}m ${s % 60}s`;
+    return `${s}s`;
+}
+
+function buildGiveawayEmbed(prize, hostedBy, winnersCount, endsAt, entrantCount) {
+    const remaining = endsAt - Date.now();
+    return new EmbedBuilder()
+        .setAuthor({ name: 'Vloxora Giveaway', iconURL: `https://cdn.discordapp.com/emojis/1493842549289386074.png` })
+        .setTitle(prize)
+        .setColor(0x6366f1)
+        .addFields(
+            { name: 'Ends In',   value: formatTimeRemaining(remaining), inline: true },
+            { name: 'Winners',   value: `${winnersCount}`,              inline: true },
+            { name: 'Hosted By', value: hostedBy,                       inline: true },
+            { name: 'Entries',   value: `${entrantCount}`,              inline: true }
+        )
+        .setFooter({ text: `Ends at` })
+        .setTimestamp(endsAt);
+}
+
+async function endGiveaway(messageId) {
+    const gw = activeGiveaways.get(messageId);
+    if (!gw) return;
+
+    clearInterval(gw.timerInterval);
+    clearTimeout(gw.endTimeout);
+    activeGiveaways.delete(messageId);
+
+    try {
+        const guild  = await client.guilds.fetch(CONFIG.GUILD_ID);
+        const ch     = await guild.channels.fetch(gw.channelId);
+        const msg    = await ch.messages.fetch(messageId);
+
+        const entrants = [...gw.entrants];
+        const winnerIds = [];
+
+        const pool = [...entrants];
+        const count = Math.min(gw.winnersCount, pool.length);
+        for (let i = 0; i < count; i++) {
+            const idx = Math.floor(Math.random() * pool.length);
+            winnerIds.push(pool.splice(idx, 1)[0]);
+        }
+
+        const disabledRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('giveaway_enter')
+                .setLabel(`${entrants.length} entered`)
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(true)
+        );
+
+        const endedEmbed = new EmbedBuilder()
+            .setAuthor({ name: 'Vloxora Giveaway', iconURL: `https://cdn.discordapp.com/emojis/1493842549289386074.png` })
+            .setTitle(gw.prize)
+            .setColor(0x374151)
+            .addFields(
+                { name: 'Status',    value: 'Ended',          inline: true },
+                { name: 'Winners',   value: `${gw.winnersCount}`, inline: true },
+                { name: 'Hosted By', value: gw.hostedBy,      inline: true },
+                { name: 'Entries',   value: `${entrants.length}`, inline: true }
+            )
+            .setFooter({ text: 'Ended at' })
+            .setTimestamp();
+
+        await msg.edit({ embeds: [endedEmbed], components: [disabledRow] });
+
+        if (winnerIds.length === 0) {
+            await ch.send({ content: `**${gw.prize}** — No valid entries, no winners this time.`, reply: { messageReference: messageId } });
+        } else {
+            const mentions = winnerIds.map(id => `<@${id}>`).join(', ');
+            await ch.send({
+                content: `Congratulations ${mentions}! You won **${gw.prize}**! Please open a ticket on vloxora.com to claim your prize.`,
+                reply: { messageReference: messageId }
+            });
+        }
+
+        console.log(`✅ Giveaway ended: ${gw.prize} — winners: ${winnerIds.join(', ') || 'none'}`);
+    } catch (err) {
+        console.error('❌ Error ending giveaway:', err);
+    }
+}
+
 // Handle slash commands and buttons
 client.on('interactionCreate', async (interaction) => {
+
+    // Handle giveaway enter button
+    if (interaction.isButton() && interaction.customId === 'giveaway_enter') {
+        const gw = activeGiveaways.get(interaction.message.id);
+        if (!gw) return interaction.reply({ content: 'This giveaway has already ended.', ephemeral: true });
+
+        const userId = interaction.user.id;
+        if (gw.entrants.has(userId)) {
+            gw.entrants.delete(userId);
+            await interaction.reply({ content: 'You have left the giveaway.', ephemeral: true });
+        } else {
+            gw.entrants.add(userId);
+            await interaction.reply({ content: 'You have entered the giveaway! Good luck.', ephemeral: true });
+        }
+
+        // Update entry count on embed immediately
+        try {
+            const updatedEmbed = buildGiveawayEmbed(gw.prize, gw.hostedBy, gw.winnersCount, gw.endsAt, gw.entrants.size);
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('giveaway_enter')
+                    .setLabel('Enter Giveaway')
+                    .setStyle(ButtonStyle.Primary)
+            );
+            await interaction.message.edit({ embeds: [updatedEmbed], components: [row] });
+        } catch (e) { console.error('Embed update error:', e); }
+        return;
+    }
 
     // Handle close button
     if (interaction.isButton() && interaction.customId === 'close_ticket') {
@@ -130,6 +271,69 @@ client.on('interactionCreate', async (interaction) => {
         const user = interaction.options.getUser('user');
         await interaction.channel.permissionOverwrites.delete(user);
         await interaction.reply(`✅ Removed ${user} from the ticket.`);
+    }
+
+    // /giveaway — start a giveaway
+    if (interaction.commandName === 'giveaway') {
+        const prize      = interaction.options.getString('prize');
+        const durationRaw = interaction.options.getString('duration');
+        const winnersCount = interaction.options.getInteger('winners');
+        const hostedBy   = interaction.options.getString('hosted_by') || interaction.member.displayName;
+
+        const durationMs = parseDuration(durationRaw);
+        if (!durationMs || durationMs < 10000) {
+            return interaction.reply({ content: '❌ Invalid duration. Use formats like `30m`, `1h`, `2d`. Minimum is 10s.', ephemeral: true });
+        }
+        if (durationMs > 14 * 24 * 3600000) {
+            return interaction.reply({ content: '❌ Maximum giveaway duration is 14 days.', ephemeral: true });
+        }
+
+        const endsAt = Date.now() + durationMs;
+        const guild  = await client.guilds.fetch(CONFIG.GUILD_ID);
+        const ch     = await guild.channels.fetch(CONFIG.GIVEAWAY_CHANNEL_ID);
+
+        const embed = buildGiveawayEmbed(prize, hostedBy, winnersCount, endsAt, 0);
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('giveaway_enter')
+                .setLabel('Enter Giveaway')
+                .setStyle(ButtonStyle.Primary)
+        );
+
+        const msg = await ch.send({ content: `@everyone`, embeds: [embed], components: [row] });
+
+        const gwData = {
+            prize,
+            hostedBy,
+            winnersCount,
+            endsAt,
+            entrants: new Set(),
+            channelId: ch.id,
+            timerInterval: null,
+            endTimeout: null
+        };
+
+        // Live timer — update embed every 20s
+        gwData.timerInterval = setInterval(async () => {
+            try {
+                const liveEmbed = buildGiveawayEmbed(prize, hostedBy, winnersCount, endsAt, gwData.entrants.size);
+                const liveRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('giveaway_enter')
+                        .setLabel('Enter Giveaway')
+                        .setStyle(ButtonStyle.Primary)
+                );
+                await msg.edit({ embeds: [liveEmbed], components: [liveRow] });
+            } catch (e) { console.error('Timer update error:', e); }
+        }, 20000);
+
+        // End the giveaway after duration
+        gwData.endTimeout = setTimeout(() => endGiveaway(msg.id), durationMs);
+
+        activeGiveaways.set(msg.id, gwData);
+
+        console.log(`✅ Giveaway started: "${prize}" for ${formatTimeRemaining(durationMs)} by ${hostedBy}`);
+        await interaction.reply({ content: `✅ Giveaway started in <#${ch.id}>!`, ephemeral: true });
     }
 });
 
