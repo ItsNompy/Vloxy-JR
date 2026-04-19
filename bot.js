@@ -1139,7 +1139,7 @@ app.post('/create-cashout', async (req, res) => {
             .addFields(
                 { name: 'Seller',     value: `${member} (@${member.user.username})`, inline: false },
                 { name: 'Items',      value: itemsList,                               inline: false },
-                { name: 'Est. Value', value: `$${Number(total).toLocaleString()}`,    inline: true  },
+                { name: 'Est. Value', value: `$${Number(total).toLocaleString()} *(at $2/1k — negotiable)*`, inline: true  },
                 { name: 'Request ID', value: `#${ticketNumber}`,                      inline: true  },
                 { name: 'Date',       value: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }), inline: true }
             )
