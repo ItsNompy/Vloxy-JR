@@ -8,7 +8,8 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildMessages
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
     ]
 });
 
@@ -32,6 +33,8 @@ const CONFIG = {
     CHANGES_CHANNEL_ID: '1494041831263043684',
     CHANGES_ROLE_ID: '1493867314565877831',
     GIVEAWAY_CHANNEL_ID: '1493779765184692406',
+    VOUCH_ROLE_ID: '1494151986436903142',
+    VOUCH_CHANNEL_ID: '1478513277276258324',
     API_SECRET: process.env.API_SECRET
 };
 
@@ -63,6 +66,11 @@ client.once('clientReady', async () => {
             .addIntegerOption(opt => opt.setName('winners').setDescription('Number of winners').setRequired(true).setMinValue(1).setMaxValue(10))
             .addStringOption(opt => opt.setName('hosted_by').setDescription('Who is hosting? (defaults to your name)').setRequired(false))
             .addStringOption(opt => opt.setName('image').setDescription('Image URL to display on the giveaway (optional)').setRequired(false))
+            .toJSON(),
+        new SlashCommandBuilder()
+            .setName('vouch')
+            .setDescription('Give a user the Vouch In Progress role so they can type in the vouches channel')
+            .addUserOption(opt => opt.setName('user').setDescription('The user to give the vouch role to').setRequired(true))
             .toJSON(),
     ];
 
@@ -353,6 +361,24 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply(`✅ Removed ${user} from the ticket.`);
     }
 
+    // /vouch — give a user the Vouch In Progress role
+    if (interaction.commandName === 'vouch') {
+        const targetUser   = interaction.options.getUser('user');
+        const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+
+        if (!targetMember) {
+            return interaction.reply({ content: '❌ Could not find that user in the server.', ephemeral: true });
+        }
+
+        if (targetMember.roles.cache.has(CONFIG.VOUCH_ROLE_ID)) {
+            return interaction.reply({ content: `${targetUser} already has the Vouch In Progress role.`, ephemeral: true });
+        }
+
+        await targetMember.roles.add(CONFIG.VOUCH_ROLE_ID);
+        console.log(`✅ Vouch In Progress role given to ${targetUser.tag} by ${interaction.user.tag}`);
+        await interaction.reply({ content: `✅ ${targetUser} has been given the Vouch In Progress role and can now type in the vouches channel.`, ephemeral: true });
+    }
+
     // /giveaway — start a giveaway
     if (interaction.commandName === 'giveaway') {
         const prize        = interaction.options.getString('prize');
@@ -408,6 +434,28 @@ client.on('interactionCreate', async (interaction) => {
 
         console.log(`✅ Giveaway started: "${prize}" for ${formatTimeRemaining(durationMs)} by ${hostedBy}`);
         await interaction.reply({ content: `✅ Giveaway started in <#${ch.id}>!`, ephemeral: true });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════
+// VOUCH ROLE AUTO-REMOVE
+// Removes Vouch In Progress role once the user sends a message
+// in the vouches channel
+// ═══════════════════════════════════════════════════════════
+client.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
+    if (message.channel.id !== CONFIG.VOUCH_CHANNEL_ID) return;
+
+    const member = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
+    if (!member) return;
+
+    if (!member.roles.cache.has(CONFIG.VOUCH_ROLE_ID)) return;
+
+    try {
+        await member.roles.remove(CONFIG.VOUCH_ROLE_ID);
+        console.log(`✅ Vouch In Progress role removed from ${message.author.tag} after posting in vouches channel`);
+    } catch (err) {
+        console.error('❌ Failed to remove vouch role:', err);
     }
 });
 
@@ -493,13 +541,11 @@ app.post('/create-ticket', async (req, res) => {
             .setTitle('New Order')
             .setColor(0x6366f1)
             .addFields(
-                { name: 'Customer',   value: `${member} (@${member.user.username})`, inline: false },
-                { name: '\u200b',     value: '\u200b',                               inline: false },
-                { name: 'Items',      value: itemsList,                              inline: false },
-                { name: '\u200b',     value: '\u200b',                               inline: false },
-                { name: 'Total',      value: `$${Number(total).toLocaleString()}`,   inline: true  },
-                { name: 'Order ID',   value: `#${ticketNumber}`,                     inline: true  },
-                { name: 'Date',       value: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }), inline: true }
+                { name: 'Customer', value: `${member} (@${member.user.username})`, inline: false },
+                { name: 'Items',    value: itemsList,                              inline: false },
+                { name: 'Total',    value: `$${Number(total).toLocaleString()}`,   inline: true  },
+                { name: 'Order ID', value: `#${ticketNumber}`,                     inline: true  },
+                { name: 'Date',     value: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }), inline: true }
             )
             .setFooter({ text: 'Vloxora Shop • Vloxy JR' })
             .setTimestamp();
