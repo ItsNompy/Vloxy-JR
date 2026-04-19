@@ -62,6 +62,7 @@ client.once('clientReady', async () => {
             .addStringOption(opt => opt.setName('duration').setDescription('Duration e.g. 10m, 1h, 2d').setRequired(true))
             .addIntegerOption(opt => opt.setName('winners').setDescription('Number of winners').setRequired(true).setMinValue(1).setMaxValue(10))
             .addStringOption(opt => opt.setName('hosted_by').setDescription('Who is hosting? (defaults to your name)').setRequired(false))
+            .addStringOption(opt => opt.setName('image').setDescription('Image URL to display on the giveaway (optional)').setRequired(false))
             .toJSON(),
     ];
 
@@ -143,7 +144,7 @@ function buildGiveawayEmbed(gw, ended = false) {
         .setDescription(
             ended
                 ? `This giveaway has ended. Thank you to everyone who entered!`
-                : `Press **Enter Giveaway** to join.\nServer Boosters receive **2× entries** automatically.`
+                : `Press **Enter Giveaway** to join.`
         )
         .addFields(
             {
@@ -151,14 +152,16 @@ function buildGiveawayEmbed(gw, ended = false) {
                 value: ended ? 'Ended' : formatTimeRemaining(remaining),
                 inline: true
             },
-            { name: 'Winners',    value: `${gw.winnersCount}`,  inline: true },
-            { name: 'Hosted By',  value: gw.hostedBy,           inline: true },
-            { name: 'Participants', value: `${uniqueCount}`,    inline: true },
-            { name: 'Total Entries', value: `${ticketCount}`,   inline: true },
-            { name: '\u200b',     value: '\u200b',              inline: true }
+            { name: 'Winners',       value: `${gw.winnersCount}`, inline: true },
+            { name: 'Hosted By',     value: gw.hostedBy,          inline: true },
+            { name: 'Participants',  value: `${uniqueCount}`,     inline: true },
+            { name: 'Total Entries', value: `${ticketCount}`,     inline: true },
+            { name: '\u200b',        value: '\u200b',             inline: true }
         )
         .setFooter({ text: ended ? 'Ended at' : 'Ends at' })
         .setTimestamp(ended ? Date.now() : gw.endsAt);
+
+    if (gw.image) embed.setThumbnail(gw.image);
 
     return embed;
 }
@@ -206,10 +209,7 @@ async function endGiveaway(messageId) {
         } else {
             const mentions = winnerIds.map(id => `<@${id}>`).join(', ');
             await ch.send({
-                content:
-                    `${mentions}\n\n` +
-                    `Congratulations, you won **${gw.prize}**!\n` +
-                    `Head over to **vloxora.com** and open a ticket to claim your prize.`,
+                content: `${mentions}\n\nCongratulations, you won **${gw.prize}**! The Giveaway Host will message you so you can claim your prize!`,
                 reply: { messageReference: messageId }
             });
         }
@@ -359,6 +359,7 @@ client.on('interactionCreate', async (interaction) => {
         const durationRaw  = interaction.options.getString('duration');
         const winnersCount = interaction.options.getInteger('winners');
         const hostedBy     = interaction.options.getString('hosted_by') || interaction.member.displayName;
+        const image        = interaction.options.getString('image') || null;
 
         const durationMs = parseDuration(durationRaw);
         if (!durationMs || durationMs < 10000) {
@@ -377,7 +378,8 @@ client.on('interactionCreate', async (interaction) => {
             hostedBy,
             winnersCount,
             endsAt,
-            entrants: new Map(),   // userId → { tag, entries }
+            image,
+            entrants: new Map(),
             channelId: ch.id,
             timerInterval: null,
             endTimeout: null
@@ -389,7 +391,7 @@ client.on('interactionCreate', async (interaction) => {
             components: [buildGiveawayRow(true)]
         });
 
-        // Live timer — update embed every 20s
+        // Live timer — update every 5s (safe Discord rate-limit floor)
         gwData.timerInterval = setInterval(async () => {
             try {
                 await msg.edit({
@@ -397,7 +399,7 @@ client.on('interactionCreate', async (interaction) => {
                     components: [buildGiveawayRow(true)]
                 });
             } catch (e) { console.error('Timer update error:', e); }
-        }, 20000);
+        }, 5000);
 
         // End the giveaway after duration
         gwData.endTimeout = setTimeout(() => endGiveaway(msg.id), durationMs);
