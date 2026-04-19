@@ -312,11 +312,15 @@ app.post('/announce-value-change', async (req, res) => {
             });
         }
 
-        if (fields.length > 0) fields.push({ name: '\u200b', value: '\u200b', inline: false });
-
         fields.push({
             name: 'Reasoning',
             value: reason || 'No reason provided.',
+            inline: false
+        });
+
+        fields.push({
+            name: '\u200b',
+            value: '[View on vloxora.com](https://vloxora.com)',
             inline: false
         });
 
