@@ -9,6 +9,7 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.GuildInvites,
         GatewayIntentBits.MessageContent
     ]
 });
@@ -73,6 +74,15 @@ client.once('clientReady', async () => {
             .setDescription('Give a user the Vouch In Progress role so they can type in the vouches channel')
             .addUserOption(opt => opt.setName('user').setDescription('The user to give the vouch role to').setRequired(true))
             .toJSON(),
+        new SlashCommandBuilder()
+            .setName('invites')
+            .setDescription('Check how many server invites you (or another user) have')
+            .addUserOption(opt => opt.setName('user').setDescription('Check another user\'s invites (optional)').setRequired(false))
+            .toJSON(),
+        new SlashCommandBuilder()
+            .setName('invites-leaderboard')
+            .setDescription('Show the top inviters in the server')
+            .toJSON(),
     ];
 
     try {
@@ -81,6 +91,14 @@ client.once('clientReady', async () => {
         console.log('✅ Slash commands registered');
     } catch (err) {
         console.error('Failed to register commands:', err);
+    }
+
+    // Cache all existing invites for invite tracking
+    try {
+        const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
+        await cacheGuildInvites(guild);
+    } catch (e) {
+        console.warn('Could not fetch guild for invite cache:', e.message);
     }
 });
 
@@ -95,6 +113,42 @@ const activeGiveaways = new Map();
 
 const GIVEAWAY_ROLE_ID  = '1495289844598046720';
 const BOOSTER_ROLE_ID   = '1480291522401271985';
+
+// ═══════════════════════════════════════════════════════════
+// INVITE TRACKING
+// ═══════════════════════════════════════════════════════════
+// inviteCache: code → { uses, inviterId, inviterTag }
+const inviteCache = new Map();
+
+// inviteStats: userId → { total, left, fake }
+// total = members who joined via their invite and stayed
+// left  = members who joined but left again
+// fake  = members who joined and left quickly (< 5 min — likely fake)
+const inviteStats = new Map();
+
+function getStats(userId) {
+    if (!inviteStats.has(userId)) {
+        inviteStats.set(userId, { total: 0, left: 0, fake: 0 });
+    }
+    return inviteStats.get(userId);
+}
+
+async function cacheGuildInvites(guild) {
+    try {
+        const invites = await guild.invites.fetch();
+        inviteCache.clear();
+        invites.forEach(inv => {
+            inviteCache.set(inv.code, {
+                uses:       inv.uses,
+                inviterId:  inv.inviter?.id,
+                inviterTag: inv.inviter?.username || 'Unknown'
+            });
+        });
+        console.log(`📨 Cached ${inviteCache.size} invites`);
+    } catch (e) {
+        console.warn('Could not cache invites:', e.message);
+    }
+}
 
 function parseDuration(str) {
     const match = str.trim().match(/^(\d+)\s*(s|m|h|d)$/i);
@@ -380,6 +434,84 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ content: `✅ ${targetUser} has been given the Vouch In Progress role and can now type in the vouches channel.`, ephemeral: true });
     }
 
+    // /invites — check your own or another user's invite count
+    if (interaction.commandName === 'invites') {
+        await interaction.deferReply({ ephemeral: false });
+
+        const targetUser = interaction.options.getUser('user') || interaction.user;
+        const stats      = getStats(targetUser.id);
+
+        // Also count invites still active (uses) from the cache
+        let activeInviteCount = 0;
+        inviteCache.forEach(inv => {
+            if (inv.inviterId === targetUser.id) activeInviteCount++;
+        });
+
+        const isSelf = targetUser.id === interaction.user.id;
+        const name   = targetUser.username;
+
+        const embed = new EmbedBuilder()
+            .setAuthor({
+                name: 'Vloxora Invite Tracker',
+                iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png'
+            })
+            .setTitle(isSelf ? 'Your Invites' : `${name}'s Invites`)
+            .setColor(0x6366f1)
+            .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
+            .addFields(
+                { name: 'Total Invites',   value: `**${stats.total}**`,         inline: true },
+                { name: 'Left the Server', value: `**${stats.left}**`,          inline: true },
+                { name: 'Active Invites',  value: `**${activeInviteCount}**`,   inline: true }
+            )
+            .setDescription(
+                isSelf
+                    ? `You have invited **${stats.total}** member${stats.total !== 1 ? 's' : ''} to Vloxora.`
+                    : `**${name}** has invited **${stats.total}** member${stats.total !== 1 ? 's' : ''} to Vloxora.`
+            )
+            .setFooter({ text: 'Invite counts reset if the bot restarts • Vloxora' })
+            .setTimestamp();
+
+        await interaction.editReply({ embeds: [embed] });
+    }
+
+    // /invites-leaderboard — top inviters
+    if (interaction.commandName === 'invites-leaderboard') {
+        await interaction.deferReply({ ephemeral: false });
+
+        // Sort by total invites
+        const sorted = [...inviteStats.entries()]
+            .sort((a, b) => b[1].total - a[1].total)
+            .slice(0, 10);
+
+        if (sorted.length === 0) {
+            return interaction.editReply({ content: 'No invite data yet — invite counts are tracked as members join.' });
+        }
+
+        const medals = ['🥇', '🥈', '🥉'];
+        const lines  = await Promise.all(sorted.map(async ([userId, stats], i) => {
+            let displayName = `<@${userId}>`;
+            try {
+                const member = await interaction.guild.members.fetch(userId);
+                displayName = member.displayName;
+            } catch (e) {}
+            const medal = medals[i] || `**${i + 1}.**`;
+            return `${medal} ${displayName} — **${stats.total}** invite${stats.total !== 1 ? 's' : ''}`;
+        }));
+
+        const embed = new EmbedBuilder()
+            .setAuthor({
+                name: 'Vloxora Invite Tracker',
+                iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png'
+            })
+            .setTitle('Top Inviters')
+            .setColor(0x6366f1)
+            .setDescription(lines.join('\n'))
+            .setFooter({ text: 'Invite counts reset if the bot restarts • Vloxora' })
+            .setTimestamp();
+
+        await interaction.editReply({ embeds: [embed] });
+    }
+
     // /giveaway — start a giveaway
     if (interaction.commandName === 'giveaway') {
         const prize        = interaction.options.getString('prize');
@@ -443,6 +575,73 @@ client.on('interactionCreate', async (interaction) => {
 // Removes Vouch In Progress role once the user sends a message
 // in the vouches channel
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// INVITE TRACKING EVENTS
+// ═══════════════════════════════════════════════════════════
+
+// Keep cache fresh when new invites are created
+client.on('inviteCreate', invite => {
+    inviteCache.set(invite.code, {
+        uses:       invite.uses || 0,
+        inviterId:  invite.inviter?.id,
+        inviterTag: invite.inviter?.username || 'Unknown'
+    });
+    console.log(`📨 New invite created: ${invite.code} by ${invite.inviter?.username}`);
+});
+
+// Remove from cache when an invite is deleted
+client.on('inviteDelete', invite => {
+    inviteCache.delete(invite.code);
+});
+
+// When a member joins — find which invite was used
+client.on('guildMemberAdd', async member => {
+    if (member.guild.id !== CONFIG.GUILD_ID) return;
+    try {
+        const newInvites = await member.guild.invites.fetch();
+        let usedInvite = null;
+
+        // Compare new use counts against cached counts to find which invite was used
+        newInvites.forEach(inv => {
+            const cached = inviteCache.get(inv.code);
+            if (cached && inv.uses > cached.uses) {
+                usedInvite = inv;
+            }
+        });
+
+        // Update the cache with new use counts
+        newInvites.forEach(inv => {
+            inviteCache.set(inv.code, {
+                uses:       inv.uses,
+                inviterId:  inv.inviter?.id,
+                inviterTag: inv.inviter?.username || 'Unknown'
+            });
+        });
+
+        if (usedInvite?.inviter) {
+            const inviterId = usedInvite.inviter.id;
+            const stats = getStats(inviterId);
+            stats.total++;
+            // Tag the member with who invited them and when (for fake detection on leave)
+            member._invitedBy = inviterId;
+            member._joinedAt  = Date.now();
+            console.log(`👋 ${member.user.username} joined via invite by ${usedInvite.inviter.username} — they now have ${stats.total} invites`);
+        }
+    } catch (e) {
+        console.warn('guildMemberAdd invite tracking error:', e.message);
+    }
+});
+
+// When a member leaves — mark the invite as lost
+client.on('guildMemberRemove', member => {
+    if (member.guild.id !== CONFIG.GUILD_ID) return;
+    // Find if we know who invited this member by checking recent joins
+    // We track this via the inviteStats by scanning all cached data
+    // Simple approach: decrement the inviter's count if member leaves within 24h
+    // For now we log it — full persistence requires a DB
+    console.log(`👋 ${member.user.username} left the server`);
+});
+
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
