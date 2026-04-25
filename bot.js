@@ -584,45 +584,73 @@ client.on('interactionCreate', async (interaction) => {
         }
         await interaction.deferReply();
 
-        // Fetch top 10 from Supabase ordered by net invites
-        const { data: rows } = await supa.from('invite_stats')
-            .select('user_id, total, left, fake, bonus')
-            .order('total', { ascending: false })
-            .limit(25);
+        try {
+            let rows = [];
 
-        if (!rows || rows.length === 0) {
-            return interaction.editReply({ content: 'No invite data yet — counts build as members join and are accepted.' });
+            if (supa) {
+                const { data, error } = await supa
+                    .from('invite_stats')
+                    .select('user_id, total, left_count, fake, bonus')
+                    .order('total', { ascending: false })
+                    .limit(25);
+                if (!error && data) rows = data;
+                else rows = [..._memStats.values()];
+            } else {
+                rows = [..._memStats.values()];
+            }
+
+            const withReal = rows
+                .map(r => ({ ...r, real: Math.max(0, (r.total||0) + (r.bonus||0) - (r.left_count||0)) }))
+                .filter(r => r.real > 0)
+                .sort((a, b) => b.real - a.real)
+                .slice(0, 10);
+
+            if (withReal.length === 0) {
+                return interaction.editReply({ content: 'No invite data yet — counts build up as members get accepted into the server.' });
+            }
+
+            const medals = ['🥇', '🥈', '🥉'];
+            const lines = [];
+
+            for (let i = 0; i < withReal.length; i++) {
+                const row   = withReal[i];
+                const medal = medals[i] || `\`${i + 1}.\``;
+                let name    = `<@${row.user_id}>`;
+                try {
+                    // Check cache first — no network call needed
+                    const cached = interaction.guild.members.cache.get(row.user_id);
+                    if (cached) {
+                        name = cached.displayName;
+                    } else {
+                        // Fetch with 2s timeout so one missing member can't hang everything
+                        const fetched = await Promise.race([
+                            interaction.guild.members.fetch(row.user_id),
+                            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2000))
+                        ]);
+                        name = fetched.displayName;
+                    }
+                } catch (e) {
+                    // Member left server or fetch timed out — keep mention fallback
+                }
+                lines.push(`${medal} **${name}** — ${row.real} invite${row.real !== 1 ? 's' : ''}`);
+            }
+
+            const embed = new EmbedBuilder()
+                .setAuthor({ name: 'Vloxora Invite Tracker', iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png' })
+                .setTitle('Top Inviters')
+                .setColor(0x6366f1)
+                .setDescription(lines.join('\n'))
+                .setFooter({ text: 'Only accounts 7d+ count • Vloxora' })
+                .setTimestamp();
+
+            await interaction.editReply({ embeds: [embed] });
+
+        } catch (err) {
+            console.error('❌ Leaderboard error:', err);
+            try { await interaction.editReply({ content: '❌ Something went wrong. Try again in a moment.' }); } catch (e) {}
         }
-
-        // Calculate real totals and filter out zeros
-        const withReal = rows
-            .map(r => ({ ...r, real: Math.max(0, (r.total||0) + (r.bonus||0) - (r.left_count||0)) }))
-            .filter(r => r.real > 0)
-            .sort((a, b) => b.real - a.real)
-            .slice(0, 10);
-
-        if (withReal.length === 0) {
-            return interaction.editReply({ content: 'No one has valid invites yet.' });
-        }
-
-        const medals = ['🥇', '🥈', '🥉'];
-        const lines = await Promise.all(withReal.map(async (row, i) => {
-            let name = `<@${row.user_id}>`;
-            try { const m = await interaction.guild.members.fetch(row.user_id); name = m.displayName; } catch (e) {}
-            const medal = medals[i] || `\`${i + 1}.\``;
-            return `${medal} **${name}** — ${row.real} invite${row.real !== 1 ? 's' : ''}`;
-        }));
-
-        const embed = new EmbedBuilder()
-            .setAuthor({ name: 'Vloxora Invite Tracker', iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png' })
-            .setTitle('Top Inviters')
-            .setColor(0x6366f1)
-            .setDescription(lines.join('\n'))
-            .setFooter({ text: 'Persisted across restarts • Only accounts 7d+ count • Vloxora' })
-            .setTimestamp();
-
-        await interaction.editReply({ embeds: [embed] });
     }
+
 
     // ── /add-invites — admin only manual invite adjustment ──
     if (interaction.commandName === 'add-invites') {
