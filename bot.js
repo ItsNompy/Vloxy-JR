@@ -37,7 +37,8 @@ const CONFIG = {
     VOUCH_ROLE_ID: '1494151986436903142',
     VOUCH_CHANNEL_ID: '1478513277276258324',
     VOTE_CHANNEL_ID: '1493791636159729684',
-    API_SECRET: process.env.API_SECRET
+    API_SECRET: process.env.API_SECRET,
+    VERIFIED_ROLE_ID: '1493831773585412136'
 };
 
 client.once('clientReady', async () => {
@@ -454,6 +455,11 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── /invites — check your own or another user's invite count ──
     if (interaction.commandName === 'invites') {
+        const hasAccess = interaction.member.roles.cache.has(CONFIG.VERIFIED_ROLE_ID)
+                       || interaction.member.roles.cache.has(CONFIG.STAFF_ROLE_ID);
+        if (!hasAccess) {
+            return interaction.reply({ content: '❌ You need the Verified role to use this command.', ephemeral: true });
+        }
         await interaction.deferReply();
 
         const targetUser = interaction.options.getUser('user') || interaction.user;
@@ -488,8 +494,13 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.editReply({ embeds: [embed] });
     }
 
-    // ── /invites-leaderboard — top inviters (anyone can use) ──
+    // ── /invites-leaderboard — top inviters (verified+ can use) ──
     if (interaction.commandName === 'invites-leaderboard') {
+        const hasAccess = interaction.member.roles.cache.has(CONFIG.VERIFIED_ROLE_ID)
+                       || interaction.member.roles.cache.has(CONFIG.STAFF_ROLE_ID);
+        if (!hasAccess) {
+            return interaction.reply({ content: '❌ You need the Verified role to use this command.', ephemeral: true });
+        }
         await interaction.deferReply();
 
         const sorted = [...inviteStats.entries()]
