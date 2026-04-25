@@ -635,7 +635,12 @@ client.on('interactionCreate', async (interaction) => {
 // ═══════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════
 // INVITE TRACKING EVENTS
+// Supports apply-to-join servers via pendingInvites + guildMemberUpdate
 // ═══════════════════════════════════════════════════════════
+
+// pendingInvites: memberId → { inviterId, inviterTag, ageDays, isFake }
+// Attribution stored when member clicks link, confirmed when they pass screening
+const pendingInvites = new Map();
 
 client.on('inviteCreate', invite => {
     inviteCache.set(invite.code, {
@@ -650,26 +655,23 @@ client.on('inviteDelete', invite => {
     inviteCache.delete(invite.code);
 });
 
+// Fires when someone clicks the invite link to apply
 client.on('guildMemberAdd', async member => {
     if (member.guild.id !== CONFIG.GUILD_ID) return;
     try {
-        // ── Account age check — ignore accounts < 7 days old ──
         const accountAge = Date.now() - member.user.createdTimestamp;
-        const isFakeAccount = accountAge < ACCOUNT_AGE_MIN_MS;
-        const ageDays = Math.floor(accountAge / 86400000);
+        const isFake     = accountAge < ACCOUNT_AGE_MIN_MS;
+        const ageDays    = Math.floor(accountAge / 86400000);
 
-        // Fetch fresh invite list and compare against cache
         const freshInvites = await member.guild.invites.fetch();
         let usedInvite = null;
 
         freshInvites.forEach(inv => {
             const cached = inviteCache.get(inv.code);
-            if (cached && inv.uses > cached.uses) {
-                usedInvite = inv;
-            }
+            if (cached && inv.uses > cached.uses) usedInvite = inv;
         });
 
-        // Update cache to reflect new use counts
+        // Update cache immediately so next join comparison is accurate
         freshInvites.forEach(inv => {
             inviteCache.set(inv.code, {
                 uses:       inv.uses,
@@ -679,32 +681,57 @@ client.on('guildMemberAdd', async member => {
         });
 
         if (!usedInvite?.inviter) {
-            console.log(`👋 ${member.user.username} joined but couldn't determine which invite was used`);
+            console.log(`👋 ${member.user.username} applied — invite undetermined`);
             return;
         }
 
-        const inviterId = usedInvite.inviter.id;
-        const stats = getStats(inviterId);
+        const inviterId  = usedInvite.inviter.id;
+        const inviterTag = usedInvite.inviter.username;
 
-        if (isFakeAccount) {
-            // Account too new — don't count it
-            stats.fake++;
-            console.log(`🚫 ${member.user.username} joined via ${usedInvite.inviter.username} but account is only ${ageDays}d old — NOT counted`);
+        if (member.pending) {
+            // Apply-to-join: store attribution, credit after screening passes
+            pendingInvites.set(member.id, { inviterId, inviterTag, ageDays, isFake });
+            console.log(`⏳ ${member.user.username} applied via ${inviterTag} — awaiting screening`);
         } else {
-            // Valid join — count it and track for leave handling
-            stats.total++;
-            joinedBy.set(member.id, inviterId);
-            console.log(`✅ ${member.user.username} (${ageDays}d old account) joined via ${usedInvite.inviter.username} — they now have ${getRealTotal(stats)} valid invites`);
+            // No screening gate — credit immediately
+            creditInvite(member, inviterId, inviterTag, ageDays, isFake);
         }
-
     } catch (e) {
         console.warn('guildMemberAdd invite tracking error:', e.message);
     }
 });
 
+// Fires when a member passes screening (pending true → false)
+client.on('guildMemberUpdate', (oldMember, newMember) => {
+    if (newMember.guild.id !== CONFIG.GUILD_ID) return;
+    if (!oldMember.pending || newMember.pending) return; // only on screening cleared
+
+    const pending = pendingInvites.get(newMember.id);
+    if (!pending) {
+        console.log(`✅ ${newMember.user.username} passed screening — no pending invite to credit`);
+        return;
+    }
+
+    pendingInvites.delete(newMember.id);
+    creditInvite(newMember, pending.inviterId, pending.inviterTag, pending.ageDays, pending.isFake);
+});
+
+function creditInvite(member, inviterId, inviterTag, ageDays, isFake) {
+    const stats = getStats(inviterId);
+    if (isFake) {
+        stats.fake++;
+        console.log(`🚫 ${member.user.username} accepted but account only ${ageDays}d old — NOT counted for ${inviterTag}`);
+    } else {
+        stats.total++;
+        joinedBy.set(member.id, inviterId);
+        console.log(`✅ ${member.user.username} (${ageDays}d old) accepted — ${inviterTag} now has ${getRealTotal(stats)} invites`);
+    }
+}
+
 client.on('guildMemberRemove', member => {
     if (member.guild.id !== CONFIG.GUILD_ID) return;
     try {
+        pendingInvites.delete(member.id); // clean up if they leave before screening
         const inviterId = joinedBy.get(member.id);
         if (inviterId) {
             const stats = getStats(inviterId);
@@ -716,6 +743,7 @@ client.on('guildMemberRemove', member => {
         console.warn('guildMemberRemove invite tracking error:', e.message);
     }
 });
+
 
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
