@@ -1,8 +1,15 @@
 // Vloxy JR — Vloxora Ticket Bot
 require('dotenv').config();
 const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder, REST, Routes, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { createClient } = require('@supabase/supabase-js');
 const express = require('express');
 const cors = require('cors');
+
+// ── Supabase client (for persistent invite tracking) ──
+const supa = createClient(
+    process.env.SUPABASE_URL     || 'https://xluffxwtjtkthfkgnddh.supabase.co',
+    process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || ''
+);
 
 const client = new Client({
     intents: [
@@ -105,6 +112,7 @@ client.once('clientReady', async () => {
     try {
         const guild = await client.guilds.fetch(CONFIG.GUILD_ID);
         await cacheGuildInvites(guild);
+        await loadJoinedByFromDB(); // rebuild who-invited-who from persistent DB
     } catch (e) {
         console.warn('Could not fetch guild for invite cache:', e.message);
     }
@@ -123,33 +131,92 @@ const GIVEAWAY_ROLE_ID  = '1495289844598046720';
 const BOOSTER_ROLE_ID   = '1480291522401271985';
 
 // ═══════════════════════════════════════════════════════════
-// INVITE TRACKING
+// INVITE TRACKING — PERSISTENT (Supabase backed)
 // ═══════════════════════════════════════════════════════════
 // inviteCache: code → { uses, inviterId, inviterTag }
 const inviteCache = new Map();
 
-// inviteStats: userId → { total, left, fake, bonus }
-// total = valid joins (stayed, account > 7 days old)
-// left  = members who joined via them but later left
-// fake  = joins rejected (account < 7 days old)
-// bonus = manually added by admin
-const inviteStats = new Map();
-
-// joinedBy: memberId → inviterId  (so we can decrement on leave)
+// joinedBy: memberId → inviterId  (in-memory for current session, rebuilt from DB on restart)
 const joinedBy = new Map();
 
 const ACCOUNT_AGE_MIN_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-function getStats(userId) {
-    if (!inviteStats.has(userId)) {
-        inviteStats.set(userId, { total: 0, left: 0, fake: 0, bonus: 0 });
+// ── DB helpers ──
+async function dbGetStats(userId) {
+    const { data } = await supa.from('invite_stats')
+        .select('*').eq('user_id', userId).maybeSingle();
+    return data || { user_id: userId, total: 0, left_count: 0, fake: 0, bonus: 0 };
+}
+
+async function dbIncrementField(userId, field, amount = 1) {
+    // Use upsert — inserts row if missing, increments field if exists
+    const current = await dbGetStats(userId);
+    const newVal  = (current[field] || 0) + amount;
+    await supa.from('invite_stats').upsert({
+        user_id: userId,
+        total:   field === 'total' ? newVal : (current.total || 0),
+        left_count: field === 'left_count'  ? newVal : (current.left_count  || 0),
+        fake:    field === 'fake'  ? newVal : (current.fake  || 0),
+        bonus:   field === 'bonus' ? newVal : (current.bonus || 0),
+    }, { onConflict: 'user_id' });
+    return newVal;
+}
+
+async function dbSetBonus(userId, bonus) {
+    const current = await dbGetStats(userId);
+    await supa.from('invite_stats').upsert({
+        user_id: userId,
+        total:   current.total || 0,
+        left_count: current.left_count  || 0,
+        fake:    current.fake  || 0,
+        bonus:   bonus,
+    }, { onConflict: 'user_id' });
+}
+
+async function dbRecordJoin(memberId, inviterId) {
+    // Record who invited whom — survives restarts
+    await supa.from('invite_joins').upsert({
+        member_id:  memberId,
+        inviter_id: inviterId,
+        joined_at:  new Date().toISOString(),
+        active:     true
+    }, { onConflict: 'member_id' });
+}
+
+async function dbRecordLeave(memberId) {
+    await supa.from('invite_joins')
+        .update({ active: false, left_at: new Date().toISOString() })
+        .eq('member_id', memberId);
+}
+
+async function getRealTotalFromDB(userId) {
+    const s = await dbGetStats(userId);
+    return Math.max(0, (s.total || 0) + (s.bonus || 0) - (s.left_count || 0));
+}
+
+// ── Rebuild joinedBy from DB on restart ──
+async function loadJoinedByFromDB() {
+    try {
+        const { data } = await supa.from('invite_joins')
+            .select('member_id, inviter_id')
+            .eq('active', true);
+        if (data) {
+            data.forEach(row => joinedBy.set(row.member_id, row.inviter_id));
+            console.log(`📊 Loaded ${data.length} invite relationships from DB`);
+        }
+    } catch (e) {
+        console.warn('Could not load invite_joins from DB:', e.message);
     }
-    return inviteStats.get(userId);
+}
+
+// getStats / getRealTotal — kept for leaderboard compat, reads from DB
+function getStats(userId) {
+    // Sync version returns empty — async callers use dbGetStats directly
+    return { total: 0, left_count: 0, fake: 0, bonus: 0 };
 }
 
 function getRealTotal(stats) {
-    // Real count = valid joins + bonus - people who left
-    return Math.max(0, stats.total + stats.bonus - stats.left);
+    return Math.max(0, (stats.total || 0) + (stats.bonus || 0) - (stats.left_count || 0));
 }
 
 async function cacheGuildInvites(guild) {
@@ -163,7 +230,7 @@ async function cacheGuildInvites(guild) {
                 inviterTag: inv.inviter?.username || 'Unknown'
             });
         });
-        console.log(`📨 Cached ${inviteCache.size} invites for tracking`);
+        console.log(`📨 Cached ${inviteCache.size} invites`);
     } catch (e) {
         console.warn('Could not cache invites:', e.message);
     }
@@ -466,7 +533,7 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.deferReply();
 
         const targetUser = interaction.options.getUser('user') || interaction.user;
-        const stats      = getStats(targetUser.id);
+        const stats      = await dbGetStats(targetUser.id);
         const realTotal  = getRealTotal(stats);
         const isSelf     = targetUser.id === interaction.user.id;
 
@@ -478,20 +545,18 @@ client.on('interactionCreate', async (interaction) => {
             .setTitle(isSelf ? 'Your Invites' : `${targetUser.username}'s Invites`)
             .setColor(0x6366f1)
             .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
-            .setDescription(
-                isSelf
-                    ? `You have **${realTotal}** valid invite${realTotal !== 1 ? 's' : ''}.`
-                    : `**${targetUser.username}** has **${realTotal}** valid invite${realTotal !== 1 ? 's' : ''}.`
-            )
+            .setDescription(isSelf
+                ? `You have **${realTotal}** valid invite${realTotal !== 1 ? 's' : ''}.`
+                : `**${targetUser.username}** has **${realTotal}** valid invite${realTotal !== 1 ? 's' : ''}.`)
             .addFields(
-                { name: 'Valid Invites',    value: `**${stats.total}**`,   inline: true },
-                { name: 'Left Server',      value: `**${stats.left}**`,    inline: true },
-                { name: 'Fake/New Account', value: `**${stats.fake}**`,    inline: true },
-                { name: 'Bonus (Admin)',     value: `**${stats.bonus}**`,   inline: true },
-                { name: 'Active Links',      value: `**${activeLinks}**`,   inline: true },
-                { name: 'Net Total',         value: `**${realTotal}**`,     inline: true }
+                { name: 'Valid Joins',      value: `**${stats.total || 0}**`,  inline: true },
+                { name: 'Left Server',      value: `**${stats.left_count  || 0}**`,  inline: true },
+                { name: 'Fake Accounts',    value: `**${stats.fake  || 0}**`,  inline: true },
+                { name: 'Bonus (Admin)',    value: `**${stats.bonus || 0}**`,  inline: true },
+                { name: 'Active Links',     value: `**${activeLinks}**`,        inline: true },
+                { name: 'Net Total',        value: `**${realTotal}**`,          inline: true }
             )
-            .setFooter({ text: 'Only accounts older than 7 days count • Vloxora' })
+            .setFooter({ text: 'Persisted across restarts • Only accounts 7d+ count • Vloxora' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
@@ -504,25 +569,33 @@ client.on('interactionCreate', async (interaction) => {
         }
         await interaction.deferReply();
 
-        const sorted = [...inviteStats.entries()]
-            .map(([id, s]) => ({ id, real: getRealTotal(s), ...s }))
-            .filter(e => e.real > 0)
+        // Fetch top 10 from Supabase ordered by net invites
+        const { data: rows } = await supa.from('invite_stats')
+            .select('user_id, total, left, fake, bonus')
+            .order('total', { ascending: false })
+            .limit(25);
+
+        if (!rows || rows.length === 0) {
+            return interaction.editReply({ content: 'No invite data yet — counts build as members join and are accepted.' });
+        }
+
+        // Calculate real totals and filter out zeros
+        const withReal = rows
+            .map(r => ({ ...r, real: Math.max(0, (r.total||0) + (r.bonus||0) - (r.left_count||0)) }))
+            .filter(r => r.real > 0)
             .sort((a, b) => b.real - a.real)
             .slice(0, 10);
 
-        if (sorted.length === 0) {
-            return interaction.editReply({ content: 'No invite data yet — invite counts build up as members join the server.' });
+        if (withReal.length === 0) {
+            return interaction.editReply({ content: 'No one has valid invites yet.' });
         }
 
         const medals = ['🥇', '🥈', '🥉'];
-        const lines  = await Promise.all(sorted.map(async (entry, i) => {
-            let name = `<@${entry.id}>`;
-            try {
-                const m = await interaction.guild.members.fetch(entry.id);
-                name = m.displayName;
-            } catch (e) {}
+        const lines = await Promise.all(withReal.map(async (row, i) => {
+            let name = `<@${row.user_id}>`;
+            try { const m = await interaction.guild.members.fetch(row.user_id); name = m.displayName; } catch (e) {}
             const medal = medals[i] || `\`${i + 1}.\``;
-            return `${medal} **${name}** — ${entry.real} invite${entry.real !== 1 ? 's' : ''}`;
+            return `${medal} **${name}** — ${row.real} invite${row.real !== 1 ? 's' : ''}`;
         }));
 
         const embed = new EmbedBuilder()
@@ -530,7 +603,7 @@ client.on('interactionCreate', async (interaction) => {
             .setTitle('Top Inviters')
             .setColor(0x6366f1)
             .setDescription(lines.join('\n'))
-            .setFooter({ text: 'Only accounts older than 7 days count • Vloxora' })
+            .setFooter({ text: 'Persisted across restarts • Only accounts 7d+ count • Vloxora' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
@@ -538,8 +611,8 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── /add-invites — admin only manual invite adjustment ──
     if (interaction.commandName === 'add-invites') {
-        const isStaff = interaction.member.roles.cache.has(CONFIG.STAFF_ROLE_ID);
-        if (!isStaff) {
+        const isStaffCheck = interaction.member.roles.cache.has(CONFIG.STAFF_ROLE_ID);
+        if (!isStaffCheck) {
             return interaction.reply({ content: '❌ Only staff can use this command.', ephemeral: true });
         }
 
@@ -547,27 +620,29 @@ client.on('interactionCreate', async (interaction) => {
         const amount     = interaction.options.getInteger('amount');
         const reason     = interaction.options.getString('reason') || 'No reason provided';
 
-        const stats   = getStats(targetUser.id);
-        const before  = getRealTotal(stats);
-        stats.bonus  += amount;
-        const after   = getRealTotal(stats);
+        const statsBefore = await dbGetStats(targetUser.id);
+        const before      = getRealTotal(statsBefore);
+        const newBonus    = (statsBefore.bonus || 0) + amount;
+        await dbSetBonus(targetUser.id, newBonus);
+        const statsAfter  = await dbGetStats(targetUser.id);
+        const after       = getRealTotal(statsAfter);
 
         const embed = new EmbedBuilder()
             .setAuthor({ name: 'Vloxora Invite Tracker', iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png' })
             .setTitle('Invites Adjusted')
             .setColor(amount >= 0 ? 0x22c55e : 0xef4444)
             .addFields(
-                { name: 'User',    value: `${targetUser} (@${targetUser.username})`, inline: false },
-                { name: 'Change',  value: `${amount >= 0 ? '+' : ''}${amount}`,      inline: true  },
-                { name: 'Before',  value: `${before}`,                               inline: true  },
-                { name: 'After',   value: `**${after}**`,                            inline: true  },
-                { name: 'Reason',  value: reason,                                    inline: false }
+                { name: 'User',   value: `${targetUser} (@${targetUser.username})`, inline: false },
+                { name: 'Change', value: `${amount >= 0 ? '+' : ''}${amount}`,       inline: true },
+                { name: 'Before', value: `${before}`,                                inline: true },
+                { name: 'After',  value: `**${after}**`,                             inline: true },
+                { name: 'Reason', value: reason,                                     inline: false }
             )
-            .setFooter({ text: `Adjusted by ${interaction.user.username}` })
+            .setFooter({ text: `Adjusted by ${interaction.user.username} • Saved to database` })
             .setTimestamp();
 
         await interaction.reply({ embeds: [embed] });
-        console.log(`✅ Admin ${interaction.user.username} adjusted ${targetUser.username}'s invites by ${amount} (now ${after}). Reason: ${reason}`);
+        console.log(`✅ Admin ${interaction.user.username} adjusted ${targetUser.username}'s bonus by ${amount} (now ${after} net). Reason: ${reason}`);
     }
 
     // /giveaway — start a giveaway
@@ -716,28 +791,30 @@ client.on('guildMemberUpdate', (oldMember, newMember) => {
     creditInvite(newMember, pending.inviterId, pending.inviterTag, pending.ageDays, pending.isFake);
 });
 
-function creditInvite(member, inviterId, inviterTag, ageDays, isFake) {
-    const stats = getStats(inviterId);
+async function creditInvite(member, inviterId, inviterTag, ageDays, isFake) {
     if (isFake) {
-        stats.fake++;
+        await dbIncrementField(inviterId, 'fake');
         console.log(`🚫 ${member.user.username} accepted but account only ${ageDays}d old — NOT counted for ${inviterTag}`);
     } else {
-        stats.total++;
+        const newTotal = await dbIncrementField(inviterId, 'total');
+        await dbRecordJoin(member.id, inviterId);
         joinedBy.set(member.id, inviterId);
-        console.log(`✅ ${member.user.username} (${ageDays}d old) accepted — ${inviterTag} now has ${getRealTotal(stats)} invites`);
+        const realTotal = await getRealTotalFromDB(inviterId);
+        console.log(`✅ ${member.user.username} (${ageDays}d old) accepted — ${inviterTag} now has ${realTotal} invites (${newTotal} total)`);
     }
 }
 
-client.on('guildMemberRemove', member => {
+client.on('guildMemberRemove', async member => {
     if (member.guild.id !== CONFIG.GUILD_ID) return;
     try {
-        pendingInvites.delete(member.id); // clean up if they leave before screening
+        pendingInvites.delete(member.id);
         const inviterId = joinedBy.get(member.id);
         if (inviterId) {
-            const stats = getStats(inviterId);
-            stats.left++;
+            await dbIncrementField(inviterId, 'left_count');
+            await dbRecordLeave(member.id);
             joinedBy.delete(member.id);
-            console.log(`👋 ${member.user.username} left — their inviter now has ${getRealTotal(stats)} valid invites`);
+            const realTotal = await getRealTotalFromDB(inviterId);
+            console.log(`👋 ${member.user.username} left — their inviter now has ${realTotal} valid invites`);
         }
     } catch (e) {
         console.warn('guildMemberRemove invite tracking error:', e.message);
