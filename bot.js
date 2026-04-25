@@ -389,11 +389,16 @@ client.on('interactionCreate', async (interaction) => {
 
     if (!interaction.isChatInputCommand()) return;
 
-    // Only allow staff to use these commands
-    const member = interaction.member;
+    const member  = interaction.member;
     const isStaff = member.roles.cache.has(CONFIG.STAFF_ROLE_ID);
+    const isVerified = member.roles.cache.has(CONFIG.VERIFIED_ROLE_ID);
 
-    if (!isStaff) {
+    // Commands any verified member (or staff) can use — no blanket block
+    const publicCommands = ['invites', 'invites-leaderboard'];
+    const isPublic = publicCommands.includes(interaction.commandName);
+
+    // Block non-staff from staff-only commands
+    if (!isPublic && !isStaff) {
         return interaction.reply({ content: '❌ Only staff can use this command.', ephemeral: true });
     }
 
@@ -455,9 +460,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── /invites — check your own or another user's invite count ──
     if (interaction.commandName === 'invites') {
-        const hasAccess = interaction.member.roles.cache.has(CONFIG.VERIFIED_ROLE_ID)
-                       || interaction.member.roles.cache.has(CONFIG.STAFF_ROLE_ID);
-        if (!hasAccess) {
+        if (!isVerified && !isStaff) {
             return interaction.reply({ content: '❌ You need the Verified role to use this command.', ephemeral: true });
         }
         await interaction.deferReply();
@@ -496,9 +499,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── /invites-leaderboard — top inviters (verified+ can use) ──
     if (interaction.commandName === 'invites-leaderboard') {
-        const hasAccess = interaction.member.roles.cache.has(CONFIG.VERIFIED_ROLE_ID)
-                       || interaction.member.roles.cache.has(CONFIG.STAFF_ROLE_ID);
-        if (!hasAccess) {
+        if (!isVerified && !isStaff) {
             return interaction.reply({ content: '❌ You need the Verified role to use this command.', ephemeral: true });
         }
         await interaction.deferReply();
