@@ -1128,45 +1128,71 @@ app.post('/create-cashout', async (req, res) => {
             ]
         });
 
-        const itemsList = items.map(item =>
-            item.price > 0
-                ? `${item.name}  ×${item.quantity}  —  asking **$${Number(item.price).toLocaleString()}**`
-                : `${item.name}  ×${item.quantity}  —  *N/A (open to offer)*`
-        ).join('\n');
+        const itemsList = (() => {
+            const lines = items.map(item =>
+                item.price > 0
+                    ? `${item.name}  ×${item.quantity}  —  asking **$${Number(item.price).toLocaleString()}**`
+                    : `${item.name}  ×${item.quantity}  —  *N/A (open to offer)*`
+            );
+            // Discord embed field max is 1024 chars — truncate gracefully
+            let result = '';
+            for (const line of lines) {
+                const next = result ? result + '\n' + line : line;
+                if (next.length > 1000) { result += `\n*(+ ${lines.length - lines.indexOf(line)} more items)*`; break; }
+                result = next;
+            }
+            return result || 'No items listed';
+        })();
+
+        const totalStr = (total > 0)
+            ? `$${Number(total).toLocaleString()}`
+            : '*Open to offers*';
 
         const embed = new EmbedBuilder()
             .setAuthor({ name: 'Vloxora Cashout', iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png' })
             .setTitle('New Cashout Request')
             .setColor(0x22c55e)
             .addFields(
-                { name: 'Seller',           value: `${member} (@${member.user.username})`, inline: false },
-                { name: 'Items & Asking Prices', value: itemsList,                         inline: false },
-                { name: 'Total Requested',  value: total > 0 ? `$${Number(total).toLocaleString()}` : '*Open to offers*', inline: true },
-                { name: 'Request ID',       value: `#${ticketNumber}`,                     inline: true  },
-                { name: 'Date',             value: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }), inline: true }
+                { name: 'Seller',                value: `${member} (@${member.user.username})`, inline: false },
+                { name: 'Items & Asking Prices', value: itemsList,                              inline: false },
+                { name: 'Total Requested',       value: totalStr,   inline: true },
+                { name: 'Request ID',            value: `#${ticketNumber}`, inline: true },
+                { name: 'Date',                  value: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }), inline: true }
             )
             .setFooter({ text: 'Vloxora Cashout • Vloxy JR' })
             .setTimestamp();
 
-        await channel.send({ content: `<@&${CONFIG.STAFF_ROLE_ID}>`, embeds: [embed] });
+        // Send embed — catch separately so a Discord formatting error doesn't break the whole ticket
+        try {
+            await channel.send({ content: `<@&${CONFIG.STAFF_ROLE_ID}>`, embeds: [embed] });
+        } catch (embedErr) {
+            console.error('❌ Cashout embed send failed:', embedErr.message);
+            // Fallback: send a plain-text summary instead
+            const plain = `**New Cashout Request** — ${member} (@${member.user.username})\n\n${items.map(i => `• ${i.name} ×${i.quantity}${i.price > 0 ? ' — $' + Number(i.price).toLocaleString() : ' — open to offer'}`).join('\n')}\n\n**Total requested:** ${totalStr}\n**ID:** #${ticketNumber}`;
+            await channel.send({ content: `<@&${CONFIG.STAFF_ROLE_ID}>\n${plain}` });
+        }
 
-        await channel.send(
-            `Hey ${member}!\n\n` +
-            `Thanks for your cashout request. An owner will review it shortly.\n\n` +
-            `**What happens next:**\n` +
-            `1. A staff member will review your items and confirm the offer\n` +
-            `2. Once agreed, you'll send the items in-game\n` +
-            `3. You'll receive your payment\n\n` +
-            `Please sit tight!`
-        );
+        try {
+            await channel.send(
+                `Hey ${member}!\n\n` +
+                `Thanks for your cashout request. An owner will review it shortly.\n\n` +
+                `**What happens next:**\n` +
+                `1. A staff member will review your items and confirm the offer\n` +
+                `2. Once agreed, you'll send the items in-game\n` +
+                `3. You'll receive your payment\n\n` +
+                `Please sit tight!`
+            );
 
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId('close_ticket')
-                .setLabel('Close Ticket')
-                .setStyle(ButtonStyle.Danger)
-        );
-        await channel.send({ components: [row] });
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('close_ticket')
+                    .setLabel('Close Ticket')
+                    .setStyle(ButtonStyle.Danger)
+            );
+            await channel.send({ components: [row] });
+        } catch (msgErr) {
+            console.warn('⚠️ Cashout welcome message failed (non-fatal):', msgErr.message);
+        }
 
         console.log(`✅ Cashout ticket: #${channelName} for ${member.user.username} — est. $${total}`);
         res.json({ success: true, channelId: channel.id, channelName: channel.name, ticketNumber });
