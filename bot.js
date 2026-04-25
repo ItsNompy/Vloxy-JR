@@ -389,12 +389,54 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── Giveaway: Enter / Leave ──────────────────────────────
     if (interaction.isButton() && interaction.customId === 'giveaway_enter') {
-        const gw = activeGiveaways.get(interaction.message.id);
-        if (!gw) return interaction.reply({ content: 'This giveaway has already ended.', ephemeral: true });
+        let gw = activeGiveaways.get(interaction.message.id);
 
-        const userId   = interaction.user.id;
+        // If not in memory (bot restarted), rebuild minimal state from the embed
+        if (!gw) {
+            const embed = interaction.message.embeds[0];
+            // Check if the giveaway actually ended by looking at button state
+            const enterBtn = interaction.message.components?.[0]?.components?.[0];
+            if (!enterBtn || enterBtn.disabled) {
+                return interaction.reply({ content: 'This giveaway has ended.', ephemeral: true });
+            }
+
+            // Reconstruct from embed fields
+            const endsAtField = embed?.fields?.find(f => f.name === 'Time Remaining' || f.name === 'Ends');
+            const prizeTitle  = embed?.title || 'Giveaway';
+
+            // Try to parse end time from footer or description — if we can't, assume still active
+            // Re-create a minimal giveaway object so people can still enter
+            const msgId = interaction.message.id;
+            gw = {
+                prize:         prizeTitle,
+                endsAt:        Date.now() + 24 * 60 * 60 * 1000, // default 24h window if unknown
+                winnersCount:  1,
+                hostedBy:      'Vloxora',
+                image:         null,
+                entrants:      new Map(),
+                channelId:     interaction.channel.id,
+                timerInterval: null,
+                endTimeout:    null,
+                _rebuilt:      true // flag that this was rebuilt after restart
+            };
+
+            // Restart the live timer so the embed updates again
+            gw.timerInterval = setInterval(async () => {
+                try {
+                    await interaction.message.edit({
+                        embeds:     [buildGiveawayEmbed(gw)],
+                        components: [buildGiveawayRow(true)]
+                    });
+                } catch (e) {}
+            }, 5000);
+
+            activeGiveaways.set(msgId, gw);
+            console.log(`♻️ Rebuilt giveaway state for message ${msgId} after restart`);
+        }
+
+        const userId    = interaction.user.id;
         const isBooster = interaction.member?.roles?.cache?.has(BOOSTER_ROLE_ID) ?? false;
-        const entries  = isBooster ? 2 : 1;
+        const entries   = isBooster ? 2 : 1;
 
         if (gw.entrants.has(userId)) {
             gw.entrants.delete(userId);
@@ -417,12 +459,15 @@ client.on('interactionCreate', async (interaction) => {
     // ── Giveaway: View Participants ──────────────────────────
     if (interaction.isButton() && interaction.customId === 'giveaway_participants') {
         const msgId = interaction.message.id;
-        // Check both active and (recently) ended — find the message context
         const gw = activeGiveaways.get(msgId);
 
-        // If giveaway is gone from memory, we can't list — still respond gracefully
         if (!gw) {
-            return interaction.reply({ content: 'Participant data is no longer available for this giveaway.', ephemeral: true });
+            // Bot restarted — can't show participants but don't say "ended"
+            const enterBtn = interaction.message.components?.[0]?.components?.[0];
+            if (!enterBtn || enterBtn.disabled) {
+                return interaction.reply({ content: 'This giveaway has ended.', ephemeral: true });
+            }
+            return interaction.reply({ content: 'Participant list was reset when the bot restarted. Enter the giveaway to be counted going forward!', ephemeral: true });
         }
 
         if (gw.entrants.size === 0) {
