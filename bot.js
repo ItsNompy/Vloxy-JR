@@ -1,15 +1,24 @@
 // Vloxy JR — Vloxora Ticket Bot
 require('dotenv').config();
 const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder, REST, Routes, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { createClient } = require('@supabase/supabase-js');
 const express = require('express');
 const cors = require('cors');
 
-// ── Supabase client (for persistent invite tracking) ──
-const supa = createClient(
-    process.env.SUPABASE_URL     || 'https://xluffxwtjtkthfkgnddh.supabase.co',
-    process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || ''
-);
+// ── Supabase client (optional — for persistent invite tracking) ──
+let supa = null;
+try {
+    const { createClient } = require('@supabase/supabase-js');
+    const supaUrl = process.env.SUPABASE_URL || 'https://xluffxwtjtkthfkgnddh.supabase.co';
+    const supaKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || '';
+    if (supaUrl && supaKey) {
+        supa = createClient(supaUrl, supaKey);
+        console.log('✅ Supabase connected for invite tracking');
+    } else {
+        console.warn('⚠️ Supabase key not set — invite stats will be in-memory only');
+    }
+} catch (e) {
+    console.warn('⚠️ @supabase/supabase-js not installed — invite stats will be in-memory only. Run: npm install @supabase/supabase-js');
+}
 
 const client = new Client({
     intents: [
@@ -44,7 +53,7 @@ const CONFIG = {
     VOUCH_ROLE_ID: '1494151986436903142',
     VOUCH_CHANNEL_ID: '1478513277276258324',
     VOTE_CHANNEL_ID: '1493791636159729684',
-    API_SECRET: process.env.API_SECRET,
+    API_SECRET: process.env.API_SECRET || 'vloxora-secret-2026',
     VERIFIED_ROLE_ID: '1493831773585412136'
 };
 
@@ -142,51 +151,63 @@ const joinedBy = new Map();
 const ACCOUNT_AGE_MIN_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // ── DB helpers ──
+// ── In-memory fallback for when Supabase unavailable ──
+const _memStats = new Map();
+function _memGetStats(userId) {
+    if (!_memStats.has(userId)) _memStats.set(userId, { user_id: userId, total: 0, left_count: 0, fake: 0, bonus: 0 });
+    return _memStats.get(userId);
+}
+
 async function dbGetStats(userId) {
-    const { data } = await supa.from('invite_stats')
-        .select('*').eq('user_id', userId).maybeSingle();
-    return data || { user_id: userId, total: 0, left_count: 0, fake: 0, bonus: 0 };
+    if (!supa) return _memGetStats(userId);
+    try {
+        const { data } = await supa.from('invite_stats').select('*').eq('user_id', userId).maybeSingle();
+        return data || { user_id: userId, total: 0, left_count: 0, fake: 0, bonus: 0 };
+    } catch (e) { return _memGetStats(userId); }
 }
 
 async function dbIncrementField(userId, field, amount = 1) {
-    // Use upsert — inserts row if missing, increments field if exists
-    const current = await dbGetStats(userId);
-    const newVal  = (current[field] || 0) + amount;
-    await supa.from('invite_stats').upsert({
-        user_id: userId,
-        total:   field === 'total' ? newVal : (current.total || 0),
-        left_count: field === 'left_count'  ? newVal : (current.left_count  || 0),
-        fake:    field === 'fake'  ? newVal : (current.fake  || 0),
-        bonus:   field === 'bonus' ? newVal : (current.bonus || 0),
-    }, { onConflict: 'user_id' });
-    return newVal;
+    if (!supa) { const s = _memGetStats(userId); s[field] = (s[field] || 0) + amount; return s[field]; }
+    try {
+        const current = await dbGetStats(userId);
+        const newVal  = (current[field] || 0) + amount;
+        await supa.from('invite_stats').upsert({
+            user_id:    userId,
+            total:      field === 'total'      ? newVal : (current.total      || 0),
+            left_count: field === 'left_count' ? newVal : (current.left_count || 0),
+            fake:       field === 'fake'       ? newVal : (current.fake       || 0),
+            bonus:      field === 'bonus'      ? newVal : (current.bonus      || 0),
+        }, { onConflict: 'user_id' });
+        return newVal;
+    } catch (e) { const s = _memGetStats(userId); s[field] = (s[field] || 0) + amount; return s[field]; }
 }
 
 async function dbSetBonus(userId, bonus) {
-    const current = await dbGetStats(userId);
-    await supa.from('invite_stats').upsert({
-        user_id: userId,
-        total:   current.total || 0,
-        left_count: current.left_count  || 0,
-        fake:    current.fake  || 0,
-        bonus:   bonus,
-    }, { onConflict: 'user_id' });
+    if (!supa) { _memGetStats(userId).bonus = bonus; return; }
+    try {
+        const current = await dbGetStats(userId);
+        await supa.from('invite_stats').upsert({
+            user_id: userId, total: current.total || 0,
+            left_count: current.left_count || 0, fake: current.fake || 0, bonus
+        }, { onConflict: 'user_id' });
+    } catch (e) { _memGetStats(userId).bonus = bonus; }
 }
 
 async function dbRecordJoin(memberId, inviterId) {
-    // Record who invited whom — survives restarts
-    await supa.from('invite_joins').upsert({
-        member_id:  memberId,
-        inviter_id: inviterId,
-        joined_at:  new Date().toISOString(),
-        active:     true
-    }, { onConflict: 'member_id' });
+    if (!supa) return;
+    try {
+        await supa.from('invite_joins').upsert({
+            member_id: memberId, inviter_id: inviterId,
+            joined_at: new Date().toISOString(), active: true
+        }, { onConflict: 'member_id' });
+    } catch (e) { console.warn('dbRecordJoin:', e.message); }
 }
 
 async function dbRecordLeave(memberId) {
-    await supa.from('invite_joins')
-        .update({ active: false, left_at: new Date().toISOString() })
-        .eq('member_id', memberId);
+    if (!supa) return;
+    try {
+        await supa.from('invite_joins').update({ active: false, left_at: new Date().toISOString() }).eq('member_id', memberId);
+    } catch (e) { console.warn('dbRecordLeave:', e.message); }
 }
 
 async function getRealTotalFromDB(userId) {
@@ -194,20 +215,14 @@ async function getRealTotalFromDB(userId) {
     return Math.max(0, (s.total || 0) + (s.bonus || 0) - (s.left_count || 0));
 }
 
-// ── Rebuild joinedBy from DB on restart ──
 async function loadJoinedByFromDB() {
+    if (!supa) return;
     try {
-        const { data } = await supa.from('invite_joins')
-            .select('member_id, inviter_id')
-            .eq('active', true);
-        if (data) {
-            data.forEach(row => joinedBy.set(row.member_id, row.inviter_id));
-            console.log(`📊 Loaded ${data.length} invite relationships from DB`);
-        }
-    } catch (e) {
-        console.warn('Could not load invite_joins from DB:', e.message);
-    }
+        const { data } = await supa.from('invite_joins').select('member_id, inviter_id').eq('active', true);
+        if (data) { data.forEach(row => joinedBy.set(row.member_id, row.inviter_id)); console.log(`📊 Loaded ${data.length} invite relationships from DB`); }
+    } catch (e) { console.warn('loadJoinedByFromDB:', e.message); }
 }
+
 
 // getStats / getRealTotal — kept for leaderboard compat, reads from DB
 function getStats(userId) {
@@ -473,9 +488,9 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'close') {
         const channel = interaction.channel;
 
-        // Make sure we're in a ticket channel
-        if (!channel.name.startsWith('order-')) {
-            return interaction.reply({ content: '❌ This command can only be used in a ticket channel.', ephemeral: true });
+        const isTicketChannel = channel.name.startsWith('order-') || channel.name.startsWith('cashout-');
+        if (!isTicketChannel) {
+            return interaction.reply({ content: '❌ This command can only be used in a ticket or cashout channel.', ephemeral: true });
         }
 
         await interaction.reply('✅ Closing ticket in 5 seconds...');
