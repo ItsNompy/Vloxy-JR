@@ -83,6 +83,13 @@ client.once('clientReady', async () => {
             .setName('invites-leaderboard')
             .setDescription('Show the top inviters in the server')
             .toJSON(),
+        new SlashCommandBuilder()
+            .setName('add-invites')
+            .setDescription('[Admin] Manually add invite credits to a user')
+            .addUserOption(opt => opt.setName('user').setDescription('User to give invites to').setRequired(true))
+            .addIntegerOption(opt => opt.setName('amount').setDescription('Number of invites to add (use negative to remove)').setRequired(true))
+            .addStringOption(opt => opt.setName('reason').setDescription('Reason for the adjustment').setRequired(false))
+            .toJSON(),
     ];
 
     try {
@@ -120,17 +127,28 @@ const BOOSTER_ROLE_ID   = '1480291522401271985';
 // inviteCache: code → { uses, inviterId, inviterTag }
 const inviteCache = new Map();
 
-// inviteStats: userId → { total, left, fake }
-// total = members who joined via their invite and stayed
-// left  = members who joined but left again
-// fake  = members who joined and left quickly (< 5 min — likely fake)
+// inviteStats: userId → { total, left, fake, bonus }
+// total = valid joins (stayed, account > 7 days old)
+// left  = members who joined via them but later left
+// fake  = joins rejected (account < 7 days old)
+// bonus = manually added by admin
 const inviteStats = new Map();
+
+// joinedBy: memberId → inviterId  (so we can decrement on leave)
+const joinedBy = new Map();
+
+const ACCOUNT_AGE_MIN_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 function getStats(userId) {
     if (!inviteStats.has(userId)) {
-        inviteStats.set(userId, { total: 0, left: 0, fake: 0 });
+        inviteStats.set(userId, { total: 0, left: 0, fake: 0, bonus: 0 });
     }
     return inviteStats.get(userId);
+}
+
+function getRealTotal(stats) {
+    // Real count = valid joins + bonus - people who left
+    return Math.max(0, stats.total + stats.bonus - stats.left);
 }
 
 async function cacheGuildInvites(guild) {
@@ -144,7 +162,7 @@ async function cacheGuildInvites(guild) {
                 inviterTag: inv.inviter?.username || 'Unknown'
             });
         });
-        console.log(`📨 Cached ${inviteCache.size} invites`);
+        console.log(`📨 Cached ${inviteCache.size} invites for tracking`);
     } catch (e) {
         console.warn('Could not cache invites:', e.message);
     }
@@ -434,82 +452,110 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ content: `✅ ${targetUser} has been given the Vouch In Progress role and can now type in the vouches channel.`, ephemeral: true });
     }
 
-    // /invites — check your own or another user's invite count
+    // ── /invites — check your own or another user's invite count ──
     if (interaction.commandName === 'invites') {
-        await interaction.deferReply({ ephemeral: false });
+        await interaction.deferReply();
 
         const targetUser = interaction.options.getUser('user') || interaction.user;
         const stats      = getStats(targetUser.id);
+        const realTotal  = getRealTotal(stats);
+        const isSelf     = targetUser.id === interaction.user.id;
 
-        // Also count invites still active (uses) from the cache
-        let activeInviteCount = 0;
-        inviteCache.forEach(inv => {
-            if (inv.inviterId === targetUser.id) activeInviteCount++;
-        });
-
-        const isSelf = targetUser.id === interaction.user.id;
-        const name   = targetUser.username;
+        let activeLinks = 0;
+        inviteCache.forEach(inv => { if (inv.inviterId === targetUser.id) activeLinks++; });
 
         const embed = new EmbedBuilder()
-            .setAuthor({
-                name: 'Vloxora Invite Tracker',
-                iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png'
-            })
-            .setTitle(isSelf ? 'Your Invites' : `${name}'s Invites`)
+            .setAuthor({ name: 'Vloxora Invite Tracker', iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png' })
+            .setTitle(isSelf ? 'Your Invites' : `${targetUser.username}'s Invites`)
             .setColor(0x6366f1)
             .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
-            .addFields(
-                { name: 'Total Invites',   value: `**${stats.total}**`,         inline: true },
-                { name: 'Left the Server', value: `**${stats.left}**`,          inline: true },
-                { name: 'Active Invites',  value: `**${activeInviteCount}**`,   inline: true }
-            )
             .setDescription(
                 isSelf
-                    ? `You have invited **${stats.total}** member${stats.total !== 1 ? 's' : ''} to Vloxora.`
-                    : `**${name}** has invited **${stats.total}** member${stats.total !== 1 ? 's' : ''} to Vloxora.`
+                    ? `You have **${realTotal}** valid invite${realTotal !== 1 ? 's' : ''}.`
+                    : `**${targetUser.username}** has **${realTotal}** valid invite${realTotal !== 1 ? 's' : ''}.`
             )
-            .setFooter({ text: 'Invite counts reset if the bot restarts • Vloxora' })
+            .addFields(
+                { name: 'Valid Invites',    value: `**${stats.total}**`,   inline: true },
+                { name: 'Left Server',      value: `**${stats.left}**`,    inline: true },
+                { name: 'Fake/New Account', value: `**${stats.fake}**`,    inline: true },
+                { name: 'Bonus (Admin)',     value: `**${stats.bonus}**`,   inline: true },
+                { name: 'Active Links',      value: `**${activeLinks}**`,   inline: true },
+                { name: 'Net Total',         value: `**${realTotal}**`,     inline: true }
+            )
+            .setFooter({ text: 'Only accounts older than 7 days count • Vloxora' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
     }
 
-    // /invites-leaderboard — top inviters
+    // ── /invites-leaderboard — top inviters (anyone can use) ──
     if (interaction.commandName === 'invites-leaderboard') {
-        await interaction.deferReply({ ephemeral: false });
+        await interaction.deferReply();
 
-        // Sort by total invites
         const sorted = [...inviteStats.entries()]
-            .sort((a, b) => b[1].total - a[1].total)
+            .map(([id, s]) => ({ id, real: getRealTotal(s), ...s }))
+            .filter(e => e.real > 0)
+            .sort((a, b) => b.real - a.real)
             .slice(0, 10);
 
         if (sorted.length === 0) {
-            return interaction.editReply({ content: 'No invite data yet — invite counts are tracked as members join.' });
+            return interaction.editReply({ content: 'No invite data yet — invite counts build up as members join the server.' });
         }
 
         const medals = ['🥇', '🥈', '🥉'];
-        const lines  = await Promise.all(sorted.map(async ([userId, stats], i) => {
-            let displayName = `<@${userId}>`;
+        const lines  = await Promise.all(sorted.map(async (entry, i) => {
+            let name = `<@${entry.id}>`;
             try {
-                const member = await interaction.guild.members.fetch(userId);
-                displayName = member.displayName;
+                const m = await interaction.guild.members.fetch(entry.id);
+                name = m.displayName;
             } catch (e) {}
-            const medal = medals[i] || `**${i + 1}.**`;
-            return `${medal} ${displayName} — **${stats.total}** invite${stats.total !== 1 ? 's' : ''}`;
+            const medal = medals[i] || `\`${i + 1}.\``;
+            return `${medal} **${name}** — ${entry.real} invite${entry.real !== 1 ? 's' : ''}`;
         }));
 
         const embed = new EmbedBuilder()
-            .setAuthor({
-                name: 'Vloxora Invite Tracker',
-                iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png'
-            })
+            .setAuthor({ name: 'Vloxora Invite Tracker', iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png' })
             .setTitle('Top Inviters')
             .setColor(0x6366f1)
             .setDescription(lines.join('\n'))
-            .setFooter({ text: 'Invite counts reset if the bot restarts • Vloxora' })
+            .setFooter({ text: 'Only accounts older than 7 days count • Vloxora' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
+    }
+
+    // ── /add-invites — admin only manual invite adjustment ──
+    if (interaction.commandName === 'add-invites') {
+        const isStaff = interaction.member.roles.cache.has(CONFIG.STAFF_ROLE_ID);
+        if (!isStaff) {
+            return interaction.reply({ content: '❌ Only staff can use this command.', ephemeral: true });
+        }
+
+        const targetUser = interaction.options.getUser('user');
+        const amount     = interaction.options.getInteger('amount');
+        const reason     = interaction.options.getString('reason') || 'No reason provided';
+
+        const stats   = getStats(targetUser.id);
+        const before  = getRealTotal(stats);
+        stats.bonus  += amount;
+        const after   = getRealTotal(stats);
+
+        const embed = new EmbedBuilder()
+            .setAuthor({ name: 'Vloxora Invite Tracker', iconURL: 'https://cdn.discordapp.com/emojis/1493842549289386074.png' })
+            .setTitle('Invites Adjusted')
+            .setColor(amount >= 0 ? 0x22c55e : 0xef4444)
+            .addFields(
+                { name: 'User',    value: `${targetUser} (@${targetUser.username})`, inline: false },
+                { name: 'Change',  value: `${amount >= 0 ? '+' : ''}${amount}`,      inline: true  },
+                { name: 'Before',  value: `${before}`,                               inline: true  },
+                { name: 'After',   value: `**${after}**`,                            inline: true  },
+                { name: 'Reason',  value: reason,                                    inline: false }
+            )
+            .setFooter({ text: `Adjusted by ${interaction.user.username}` })
+            .setTimestamp();
+
+        await interaction.reply({ embeds: [embed] });
+        console.log(`✅ Admin ${interaction.user.username} adjusted ${targetUser.username}'s invites by ${amount} (now ${after}). Reason: ${reason}`);
     }
 
     // /giveaway — start a giveaway
@@ -579,38 +625,40 @@ client.on('interactionCreate', async (interaction) => {
 // INVITE TRACKING EVENTS
 // ═══════════════════════════════════════════════════════════
 
-// Keep cache fresh when new invites are created
 client.on('inviteCreate', invite => {
     inviteCache.set(invite.code, {
         uses:       invite.uses || 0,
         inviterId:  invite.inviter?.id,
         inviterTag: invite.inviter?.username || 'Unknown'
     });
-    console.log(`📨 New invite created: ${invite.code} by ${invite.inviter?.username}`);
+    console.log(`📨 Invite created: ${invite.code} by ${invite.inviter?.username}`);
 });
 
-// Remove from cache when an invite is deleted
 client.on('inviteDelete', invite => {
     inviteCache.delete(invite.code);
 });
 
-// When a member joins — find which invite was used
 client.on('guildMemberAdd', async member => {
     if (member.guild.id !== CONFIG.GUILD_ID) return;
     try {
-        const newInvites = await member.guild.invites.fetch();
+        // ── Account age check — ignore accounts < 7 days old ──
+        const accountAge = Date.now() - member.user.createdTimestamp;
+        const isFakeAccount = accountAge < ACCOUNT_AGE_MIN_MS;
+        const ageDays = Math.floor(accountAge / 86400000);
+
+        // Fetch fresh invite list and compare against cache
+        const freshInvites = await member.guild.invites.fetch();
         let usedInvite = null;
 
-        // Compare new use counts against cached counts to find which invite was used
-        newInvites.forEach(inv => {
+        freshInvites.forEach(inv => {
             const cached = inviteCache.get(inv.code);
             if (cached && inv.uses > cached.uses) {
                 usedInvite = inv;
             }
         });
 
-        // Update the cache with new use counts
-        newInvites.forEach(inv => {
+        // Update cache to reflect new use counts
+        freshInvites.forEach(inv => {
             inviteCache.set(inv.code, {
                 uses:       inv.uses,
                 inviterId:  inv.inviter?.id,
@@ -618,28 +666,43 @@ client.on('guildMemberAdd', async member => {
             });
         });
 
-        if (usedInvite?.inviter) {
-            const inviterId = usedInvite.inviter.id;
-            const stats = getStats(inviterId);
-            stats.total++;
-            // Tag the member with who invited them and when (for fake detection on leave)
-            member._invitedBy = inviterId;
-            member._joinedAt  = Date.now();
-            console.log(`👋 ${member.user.username} joined via invite by ${usedInvite.inviter.username} — they now have ${stats.total} invites`);
+        if (!usedInvite?.inviter) {
+            console.log(`👋 ${member.user.username} joined but couldn't determine which invite was used`);
+            return;
         }
+
+        const inviterId = usedInvite.inviter.id;
+        const stats = getStats(inviterId);
+
+        if (isFakeAccount) {
+            // Account too new — don't count it
+            stats.fake++;
+            console.log(`🚫 ${member.user.username} joined via ${usedInvite.inviter.username} but account is only ${ageDays}d old — NOT counted`);
+        } else {
+            // Valid join — count it and track for leave handling
+            stats.total++;
+            joinedBy.set(member.id, inviterId);
+            console.log(`✅ ${member.user.username} (${ageDays}d old account) joined via ${usedInvite.inviter.username} — they now have ${getRealTotal(stats)} valid invites`);
+        }
+
     } catch (e) {
         console.warn('guildMemberAdd invite tracking error:', e.message);
     }
 });
 
-// When a member leaves — mark the invite as lost
 client.on('guildMemberRemove', member => {
     if (member.guild.id !== CONFIG.GUILD_ID) return;
-    // Find if we know who invited this member by checking recent joins
-    // We track this via the inviteStats by scanning all cached data
-    // Simple approach: decrement the inviter's count if member leaves within 24h
-    // For now we log it — full persistence requires a DB
-    console.log(`👋 ${member.user.username} left the server`);
+    try {
+        const inviterId = joinedBy.get(member.id);
+        if (inviterId) {
+            const stats = getStats(inviterId);
+            stats.left++;
+            joinedBy.delete(member.id);
+            console.log(`👋 ${member.user.username} left — their inviter now has ${getRealTotal(stats)} valid invites`);
+        }
+    } catch (e) {
+        console.warn('guildMemberRemove invite tracking error:', e.message);
+    }
 });
 
 client.on('messageCreate', async (message) => {
